@@ -22,6 +22,14 @@ app:
   # 데모 계정(POST /auth/demo)의 시드는 이 플래그와 무관하게 항상 들어간다 — 그쪽은 제품 기능이다.
   onboarding:
     seed-sample-assets-on-signup: ${SEED_SAMPLE_ASSETS_ON_SIGNUP:true}
+  # 관리자 콘솔 (이슈 #111) — /api/v1/admin/** 접근 권한.
+  # bootstrap-email 이 비어 있으면 AdminBootstrapRunner 빈 자체가 만들어지지 않는다(기본 상태).
+  # 값은 반드시 환경변수로 준다 — 관리자 비밀번호를 레포에 커밋하지 않기 위해서다.
+  #   ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD=... ./gradlew :app:bootRun
+  # 계정이 이미 있으면 role 만 ADMIN 으로 올리고 비밀번호는 건드리지 않는다.
+  admin:
+    bootstrap-email: ${ADMIN_EMAIL:}
+    bootstrap-password: ${ADMIN_PASSWORD:}
   auth:
     jwt-secret: ${JWT_SECRET:local-dev-insecure-jwt-secret-please-override-in-prod-0123456789}
     access-token-ttl-seconds: 1800
@@ -39,6 +47,13 @@ app:
         JPY_KRW: "0000002"   # 100엔당
         EUR_KRW: "0000003"
         CNY_KRW: "0000053"
+      # 환율 적재 배치 (이슈 #111, ERD 2단계). 기본 꺼짐 — 켜면 매일 ECOS 를 친다.
+      # EcosProperties(record) 에는 넣지 않는다: @ConditionalOnProperty 와 @Scheduled 는
+      # Environment 를 직접 읽으므로 바인딩이 필요 없고, record 컴포넌트를 늘리면 그 생성자를
+      # 직접 호출하는 테스트들이 함께 깨진다.
+      ingest-schedule-enabled: ${ECOS_INGEST_SCHEDULE_ENABLED:false}
+      ingest-cron: ${ECOS_INGEST_CRON:0 30 9 * * *}   # KST 09:30 — ECOS 고시 이후
+      ingest-lookback-days: ${ECOS_INGEST_LOOKBACK_DAYS:14}
     fred:
       base-url: https://api.stlouisfed.org/fred
       api-key: ${FRED_API_KEY:}

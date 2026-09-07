@@ -15,6 +15,7 @@ import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
+import com.divurve.domain.user.AdminAccessService;
 
 /**
  * 이슈 #69 — {@code Content-Type} 이 없거나 지원하지 않는 요청이 실제 Spring MVC 요청 경로를 타고도
@@ -38,6 +39,13 @@ class ContentTypeErrorHandlingMockMvcTest {
 
     @Autowired
     private MockMvc mockMvc;
+
+    /**
+     * {@code WebAuthConfig} 가 관리자 리졸버를 배선하면서 이 빈을 요구한다 (이슈 #111).
+     * 이 테스트는 관리자 경로를 다루지 않지만, 없으면 컨텍스트 자체가 뜨지 않는다.
+     */
+    @MockBean
+    private AdminAccessService adminAccessService;
 
     @MockBean
     private AuthService authService;

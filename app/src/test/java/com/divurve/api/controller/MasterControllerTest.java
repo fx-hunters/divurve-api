@@ -7,7 +7,6 @@ import com.divurve.api.dto.master.CurrencyListResponse;
 import com.divurve.api.dto.master.FxTermsResponse;
 import com.divurve.common.response.ApiResponse;
 import com.divurve.domain.master.BankFxTermsMaster;
-import com.divurve.domain.master.CurrencyMaster;
 import com.divurve.domain.master.MasterDataService;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -31,7 +30,9 @@ class MasterControllerTest {
     @Test
     void listCurrencies_는_통화_표시규칙을_data_meta로_래핑한다() {
         when(masterDataService.listCurrencies()).thenReturn(List.of(
-                new CurrencyMaster.Currency("USD", 2, 1, "self", "currency-usd")));
+                new MasterDataService.CurrencyView(
+                        "USD", "미국 달러", "$", (short) 2, (short) 1, "self",
+                        false, true, null, "currency-usd", (short) 1)));
 
         ApiResponse<CurrencyListResponse> response = controller().listCurrencies();
 

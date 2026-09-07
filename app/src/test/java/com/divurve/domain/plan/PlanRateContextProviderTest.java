@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -12,6 +13,7 @@ import static org.mockito.Mockito.when;
 import com.divurve.common.exception.InvalidRequestException;
 import com.divurve.domain.forecast.ForecastService;
 import com.divurve.domain.fx.PerUnitFxRates;
+import com.divurve.domain.master.MasterDataService;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
@@ -40,13 +42,35 @@ class PlanRateContextProviderTest {
 
     private PerUnitFxRates perUnitFxRates;
     private ForecastService forecastService;
+    private MasterDataService masterDataService;
     private PlanRateContextProvider provider;
 
     @BeforeEach
     void setUp() {
         perUnitFxRates = mock(PerUnitFxRates.class);
         forecastService = mock(ForecastService.class);
-        provider = new PlanRateContextProvider(perUnitFxRates, forecastService, CLOCK);
+        masterDataService = mock(MasterDataService.class);
+        // 통화 마스터는 DB 표로 옮겨졌다(이슈 #111). 이 테스트가 검증하는 것은 표시 규칙이
+        // 계산 전제로 그대로 실려 나가는가이지 마스터 조회 자체가 아니므로, 시드와 같은 값을 세운다.
+        lenient().when(masterDataService.requireCurrency(anyString())).thenAnswer(invocation -> {
+            String code = invocation.getArgument(0);
+            return switch (code) {
+                case "USD" -> currencyView("USD", 2, 1);
+                case "JPY" -> currencyView("JPY", 0, 100);
+                case "GBP" -> currencyView("GBP", 2, 1);
+                default -> throw new InvalidRequestException(
+                        "지원하지 않는 통화입니다: " + code, "currency_code");
+            };
+        });
+        provider = new PlanRateContextProvider(
+                perUnitFxRates, forecastService, masterDataService, CLOCK);
+    }
+
+    private static MasterDataService.CurrencyView currencyView(
+            String code, int minorUnits, int quoteUnit) {
+        return new MasterDataService.CurrencyView(
+                code, code, code, (short) minorUnits, (short) quoteUnit,
+                "self", false, true, null, "currency-" + code.toLowerCase(), (short) 1);
     }
 
     private ForecastService.ForecastView forecastView(double lo, double hi, LocalDate baseDate) {
@@ -229,11 +253,17 @@ class PlanRateContextProviderTest {
     @Test
     @DisplayName("null 인자와 의존은 거부한다")
     void nullArguments_Throw() {
-        assertThatThrownBy(() -> new PlanRateContextProvider(null, forecastService, CLOCK))
+        assertThatThrownBy(() -> new PlanRateContextProvider(
+                null, forecastService, masterDataService, CLOCK))
                 .isInstanceOf(NullPointerException.class);
-        assertThatThrownBy(() -> new PlanRateContextProvider(perUnitFxRates, null, CLOCK))
+        assertThatThrownBy(() -> new PlanRateContextProvider(
+                perUnitFxRates, null, masterDataService, CLOCK))
                 .isInstanceOf(NullPointerException.class);
-        assertThatThrownBy(() -> new PlanRateContextProvider(perUnitFxRates, forecastService, null))
+        assertThatThrownBy(() -> new PlanRateContextProvider(
+                perUnitFxRates, forecastService, null, CLOCK))
+                .isInstanceOf(NullPointerException.class);
+        assertThatThrownBy(() -> new PlanRateContextProvider(
+                perUnitFxRates, forecastService, masterDataService, null))
                 .isInstanceOf(NullPointerException.class);
         assertThatThrownBy(() -> provider.resolve(null, "USD"))
                 .isInstanceOf(NullPointerException.class);

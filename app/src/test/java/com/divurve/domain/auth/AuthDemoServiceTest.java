@@ -18,6 +18,9 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import java.time.ZoneOffset;
+import java.time.Instant;
+import java.time.Clock;
 
 /**
  * {@link AuthDemoService} 단위 테스트 — 데모 유저 생성·시드 위임·토큰 발급의 협력을 검증한다.
@@ -36,11 +39,17 @@ class AuthDemoServiceTest {
     @Mock
     private TokenProvider tokenProvider;
 
+    /** 접속 기록(이슈 #111) 확인용 고정 IP·시각. */
+    private static final String CLIENT_IP = "198.51.100.7";
+
+    private static final Clock TEST_CLOCK =
+            Clock.fixed(Instant.parse("2026-09-07T12:00:00Z"), ZoneOffset.UTC);
+
     private AuthDemoService authDemoService;
 
     @BeforeEach
     void setUp() {
-        authDemoService = new AuthDemoService(userRepository, sampleDataSeeder, tokenProvider);
+        authDemoService = new AuthDemoService(userRepository, sampleDataSeeder, tokenProvider, TEST_CLOCK);
     }
 
     @Test
@@ -49,7 +58,7 @@ class AuthDemoServiceTest {
         when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
         when(tokenProvider.issue(any(), eq(true))).thenReturn(issued);
 
-        AuthTokens result = authDemoService.createDemoSession();
+        AuthTokens result = authDemoService.createDemoSession(CLIENT_IP);
 
         assertThat(result).isSameAs(issued);
 
@@ -75,8 +84,8 @@ class AuthDemoServiceTest {
         when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
         when(tokenProvider.issue(any(), eq(true))).thenReturn(new AuthTokens("a", "r", 1L));
 
-        authDemoService.createDemoSession();
-        authDemoService.createDemoSession();
+        authDemoService.createDemoSession(CLIENT_IP);
+        authDemoService.createDemoSession(CLIENT_IP);
 
         ArgumentCaptor<User> userCaptor = ArgumentCaptor.forClass(User.class);
         verify(userRepository, times(2)).save(userCaptor.capture());

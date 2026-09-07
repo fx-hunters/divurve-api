@@ -7,6 +7,8 @@ import com.divurve.domain.user.UserRepository;
 import com.divurve.domain.user.entity.User;
 import java.util.UUID;
 import org.springframework.transaction.annotation.Transactional;
+import java.time.Clock;
+import java.time.Instant;
 
 /**
  * 데모 세션 발급 유스케이스 (이슈 #9, FR-ON-07). 회원가입 없이 샘플 데이터가 채워진 데모 계정을 만들고
@@ -25,20 +27,27 @@ public class AuthDemoService {
     private final UserRepository userRepository;
     private final SampleDataSeeder sampleDataSeeder;
     private final TokenProvider tokenProvider;
+    private final Clock clock;
 
     public AuthDemoService(
             UserRepository userRepository,
             SampleDataSeeder sampleDataSeeder,
-            TokenProvider tokenProvider) {
+            TokenProvider tokenProvider,
+            Clock clock) {
         this.userRepository = userRepository;
         this.sampleDataSeeder = sampleDataSeeder;
         this.tokenProvider = tokenProvider;
+        this.clock = clock;
     }
 
     /** 데모 유저를 생성하고 샘플 데이터를 시드한 뒤, {@code is_demo=true} 토큰을 발급해 반환한다. */
     @Transactional
-    public AuthTokens createDemoSession() {
-        User demoUser = userRepository.save(User.createDemo(newDemoEmail(), DemoSampleData.USER_NAME));
+    public AuthTokens createDemoSession(String clientIp) {
+        User demoUser = User.createDemo(newDemoEmail(), DemoSampleData.USER_NAME);
+        // 데모 계정은 발급이 곧 접속이다 (이슈 #111). 관리자 목록에서 데모 세션이 언제·어디서
+        // 열렸는지 보이지 않으면, 쌓인 데모 행이 무엇인지 알 방법이 없다.
+        demoUser.recordLogin(Instant.now(clock), clientIp);
+        demoUser = userRepository.save(demoUser);
         sampleDataSeeder.seed(demoUser);
         return tokenProvider.issue(demoUser.getId(), true);
     }

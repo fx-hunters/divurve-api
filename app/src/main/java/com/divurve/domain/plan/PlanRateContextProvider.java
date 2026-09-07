@@ -5,7 +5,7 @@ import com.divurve.common.exception.InvalidRequestException;
 import com.divurve.domain.forecast.ForecastService;
 import com.divurve.domain.fx.PerUnitFxRates;
 import com.divurve.domain.master.BankFxTermsMaster;
-import com.divurve.domain.master.CurrencyMaster;
+import com.divurve.domain.master.MasterDataService;
 import com.divurve.domain.settings.BankSpreadTable;
 import com.divurve.engine.planner.PlannerPolicy;
 import com.divurve.engine.planner.RateRange;
@@ -59,12 +59,17 @@ public class PlanRateContextProvider {
 
     private final PerUnitFxRates perUnitFxRates;
     private final ForecastService forecastService;
+    private final MasterDataService masterDataService;
     private final Clock clock;
 
     public PlanRateContextProvider(
-            PerUnitFxRates perUnitFxRates, ForecastService forecastService, Clock clock) {
+            PerUnitFxRates perUnitFxRates,
+            ForecastService forecastService,
+            MasterDataService masterDataService,
+            Clock clock) {
         this.perUnitFxRates = Objects.requireNonNull(perUnitFxRates, "perUnitFxRates");
         this.forecastService = Objects.requireNonNull(forecastService, "forecastService");
+        this.masterDataService = Objects.requireNonNull(masterDataService, "masterDataService");
         this.clock = Objects.requireNonNull(clock, "clock");
     }
 
@@ -82,7 +87,7 @@ public class PlanRateContextProvider {
         Objects.requireNonNull(currencyCode, "currencyCode");
 
         BigDecimal baseRate = requireRate(currencyCode);
-        CurrencyMaster.Currency currency = requireCurrency(currencyCode);
+        MasterDataService.CurrencyView currency = masterDataService.requireCurrency(currencyCode);
         BankFxTermsMaster.Term terms = resolveTerms(currencyCode);
 
         Optional<ForecastService.ForecastView> forecast = findForecast(userId, currencyCode);
@@ -113,14 +118,6 @@ public class PlanRateContextProvider {
                 .filter(rate -> rate.signum() > 0)
                 .orElseThrow(() -> new InvalidRequestException(
                         "환율을 조회할 수 없어 계획을 계산하지 않습니다: " + currencyCode, "currency_code"));
-    }
-
-    private CurrencyMaster.Currency requireCurrency(String currencyCode) {
-        return CurrencyMaster.all().stream()
-                .filter(currency -> currency.currencyCode().equals(currencyCode))
-                .findFirst()
-                .orElseThrow(() -> new InvalidRequestException(
-                        "지원하지 않는 통화입니다: " + currencyCode, "currency_code"));
     }
 
     /** 통화·채널별 조건. 마스터에 없으면 기본 스프레드와 무수수료로 둔다. */

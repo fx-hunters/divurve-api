@@ -24,6 +24,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import java.time.ZoneOffset;
+import java.time.Clock;
 
 /**
  * {@link AuthService} 단위 테스트 — 가입·로그인·토큰 갱신.
@@ -32,6 +34,12 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
  * 클라이언트는 이 값 하나로 초기 설정으로 보낼지 정한다(FR-IS-01·FR-IS-07).
  */
 class AuthServiceTest {
+
+    /** 접속 기록(이슈 #111)이 남는지 확인하기 위한 고정 IP·시각. */
+    private static final String CLIENT_IP = "203.0.113.9";
+
+    private static final Clock TEST_CLOCK =
+            Clock.fixed(Instant.parse("2026-09-07T12:00:00Z"), ZoneOffset.UTC);
 
     private AuthService authService;
     private UserRepository userRepository;
@@ -43,7 +51,7 @@ class AuthServiceTest {
         userRepository = mock(UserRepository.class);
         tokenProvider = mock(TokenProvider.class);
         sampleDataSeeder = mock(SampleDataSeeder.class);
-        authService = new AuthService(userRepository, tokenProvider, sampleDataSeeder, true);
+        authService = new AuthService(userRepository, tokenProvider, sampleDataSeeder, true, TEST_CLOCK);
     }
 
     @Test
@@ -62,7 +70,7 @@ class AuthServiceTest {
         AuthTokens expectedTokens = new AuthTokens("access", "refresh", 1800);
         when(tokenProvider.issue(userId, false)).thenReturn(expectedTokens);
 
-        AuthTokens result = authService.signup(email, password, name);
+        AuthTokens result = authService.signup(email, password, name, CLIENT_IP);
 
         assertThat(result.accessToken()).isEqualTo("access");
         assertThat(result.refreshToken()).isEqualTo("refresh");
@@ -77,7 +85,7 @@ class AuthServiceTest {
         // 없어 빈 계정으로 두면 온보딩 2단계부터 홈·X-ray·플랜까지 전부 빈 화면이 된다.
         User savedUser = givenSavedUser();
 
-        authService.signup("user@example.com", "password123", "User Name");
+        authService.signup("user@example.com", "password123", "User Name", CLIENT_IP);
 
         verify(sampleDataSeeder).seed(savedUser);
     }
@@ -85,10 +93,10 @@ class AuthServiceTest {
     @Test
     void 플래그를_끄면_가입_계정에_샘플을_넣지_않는다() {
         // 실연동이 도착하면 플래그를 끄는 것으로 먼저 분리하고, 그 다음 호출을 걷어낸다.
-        AuthService withoutSeed = new AuthService(userRepository, tokenProvider, sampleDataSeeder, false);
+        AuthService withoutSeed = new AuthService(userRepository, tokenProvider, sampleDataSeeder, false, TEST_CLOCK);
         givenSavedUser();
 
-        withoutSeed.signup("user@example.com", "password123", "User Name");
+        withoutSeed.signup("user@example.com", "password123", "User Name", CLIENT_IP);
 
         verifyNoInteractions(sampleDataSeeder);
     }
@@ -115,7 +123,7 @@ class AuthServiceTest {
         User existingUser = User.create(email, name, "hashed");
         when(userRepository.findByEmail(email)).thenReturn(Optional.of(existingUser));
 
-        assertThatThrownBy(() -> authService.signup(email, password, name))
+        assertThatThrownBy(() -> authService.signup(email, password, name, CLIENT_IP))
                 .isInstanceOf(DuplicateResourceException.class)
                 .hasMessage("이미 사용 중인 이메일입니다.");
     }
@@ -128,7 +136,7 @@ class AuthServiceTest {
         when(userRepository.findByEmail(email)).thenReturn(Optional.of(existingUser));
 
         DuplicateResourceException thrown = catchThrowableOfType(
-                () -> authService.signup(email, "password123", "User Name"),
+                () -> authService.signup(email, "password123", "User Name", CLIENT_IP),
                 DuplicateResourceException.class);
 
         assertThat(thrown.getStatus()).isEqualTo(HttpStatus.CONFLICT);
@@ -138,21 +146,21 @@ class AuthServiceTest {
 
     @Test
     void signup_emailNull() {
-        assertThatThrownBy(() -> authService.signup(null, "password", "name"))
+        assertThatThrownBy(() -> authService.signup(null, "password", "name", CLIENT_IP))
                 .isInstanceOf(NullPointerException.class)
                 .hasMessage("email must not be null");
     }
 
     @Test
     void signup_passwordNull() {
-        assertThatThrownBy(() -> authService.signup("email@example.com", null, "name"))
+        assertThatThrownBy(() -> authService.signup("email@example.com", null, "name", CLIENT_IP))
                 .isInstanceOf(NullPointerException.class)
                 .hasMessage("password must not be null");
     }
 
     @Test
     void signup_nameNull() {
-        assertThatThrownBy(() -> authService.signup("email@example.com", "password", null))
+        assertThatThrownBy(() -> authService.signup("email@example.com", "password", null, CLIENT_IP))
                 .isInstanceOf(NullPointerException.class)
                 .hasMessage("name must not be null");
     }
@@ -167,7 +175,7 @@ class AuthServiceTest {
         when(userRepository.findByEmail(email)).thenReturn(Optional.of(user));
         when(tokenProvider.issue(user.getId(), false)).thenReturn(new AuthTokens("access", "refresh", 1800));
 
-        AuthResult result = authService.login(email, password);
+        AuthResult result = authService.login(email, password, CLIENT_IP);
 
         assertThat(result.tokens().accessToken()).isEqualTo("access");
         assertThat(result.tokens().refreshToken()).isEqualTo("refresh");
@@ -188,7 +196,7 @@ class AuthServiceTest {
         when(userRepository.findByEmail(email)).thenReturn(Optional.of(user));
         when(tokenProvider.issue(user.getId(), false)).thenReturn(new AuthTokens("access", "refresh", 1800));
 
-        assertThat(authService.login(email, password).onboarded()).isTrue();
+        assertThat(authService.login(email, password, CLIENT_IP).onboarded()).isTrue();
     }
 
     @Test
@@ -198,7 +206,7 @@ class AuthServiceTest {
 
         when(userRepository.findByEmail(email)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> authService.login(email, password))
+        assertThatThrownBy(() -> authService.login(email, password, CLIENT_IP))
                 .isInstanceOf(UnauthorizedException.class)
                 .hasMessage("이메일 또는 비밀번호가 올바르지 않습니다.");
     }
@@ -213,7 +221,7 @@ class AuthServiceTest {
         User user = User.create(email, "User Name", passwordHash);
         when(userRepository.findByEmail(email)).thenReturn(Optional.of(user));
 
-        assertThatThrownBy(() -> authService.login(email, wrongPassword))
+        assertThatThrownBy(() -> authService.login(email, wrongPassword, CLIENT_IP))
                 .isInstanceOf(UnauthorizedException.class)
                 .hasMessage("이메일 또는 비밀번호가 올바르지 않습니다.");
     }
@@ -234,9 +242,9 @@ class AuthServiceTest {
         when(userRepository.findByEmail(unknownEmail)).thenReturn(Optional.empty());
 
         UnauthorizedException wrongPasswordException = catchThrowableOfType(
-                () -> authService.login(knownEmail, "wrongpassword"), UnauthorizedException.class);
+                () -> authService.login(knownEmail, "wrongpassword", CLIENT_IP), UnauthorizedException.class);
         UnauthorizedException unknownEmailException = catchThrowableOfType(
-                () -> authService.login(unknownEmail, correctPassword), UnauthorizedException.class);
+                () -> authService.login(unknownEmail, correctPassword, CLIENT_IP), UnauthorizedException.class);
 
         assertThat(wrongPasswordException.getStatus()).isEqualTo(unknownEmailException.getStatus());
         assertThat(wrongPasswordException.getCode()).isEqualTo(unknownEmailException.getCode());
@@ -251,7 +259,7 @@ class AuthServiceTest {
         String unknownEmail = "unknown@example.com";
         when(userRepository.findByEmail(unknownEmail)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> authService.login(unknownEmail, "any-password"))
+        assertThatThrownBy(() -> authService.login(unknownEmail, "any-password", CLIENT_IP))
                 .isInstanceOf(UnauthorizedException.class);
 
         verify(userRepository).findByEmail(unknownEmail);
@@ -259,14 +267,14 @@ class AuthServiceTest {
 
     @Test
     void login_emailNull() {
-        assertThatThrownBy(() -> authService.login(null, "password"))
+        assertThatThrownBy(() -> authService.login(null, "password", CLIENT_IP))
                 .isInstanceOf(NullPointerException.class)
                 .hasMessage("email must not be null");
     }
 
     @Test
     void login_passwordNull() {
-        assertThatThrownBy(() -> authService.login("email@example.com", null))
+        assertThatThrownBy(() -> authService.login("email@example.com", null, CLIENT_IP))
                 .isInstanceOf(NullPointerException.class)
                 .hasMessage("password must not be null");
     }
@@ -284,7 +292,7 @@ class AuthServiceTest {
         user.completeOnboarding(Instant.parse("2026-09-01T15:30:00Z"));
         when(userRepository.findById(userId)).thenReturn(Optional.of(user));
 
-        AuthResult result = authService.refreshAccessToken(refreshToken);
+        AuthResult result = authService.refreshAccessToken(refreshToken, CLIENT_IP);
 
         assertThat(result.tokens().accessToken()).isEqualTo("new_access");
         assertThat(result.tokens().refreshToken()).isEqualTo(refreshToken);
@@ -305,7 +313,7 @@ class AuthServiceTest {
         when(tokenProvider.issue(userId, false)).thenReturn(new AuthTokens("new_access", "refresh", 1800));
         when(userRepository.findById(userId)).thenReturn(Optional.empty());
 
-        assertThat(authService.refreshAccessToken(refreshToken).onboarded()).isFalse();
+        assertThat(authService.refreshAccessToken(refreshToken, CLIENT_IP).onboarded()).isFalse();
     }
 
     @Test
@@ -314,7 +322,7 @@ class AuthServiceTest {
 
         when(tokenProvider.verifyRefreshToken(refreshToken)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> authService.refreshAccessToken(refreshToken))
+        assertThatThrownBy(() -> authService.refreshAccessToken(refreshToken, CLIENT_IP))
                 .isInstanceOf(UnauthorizedException.class)
                 .hasMessage("유효하지 않거나 만료된 리프레시 토큰입니다.");
     }
@@ -326,7 +334,8 @@ class AuthServiceTest {
         when(tokenProvider.verifyRefreshToken(refreshToken)).thenReturn(Optional.empty());
 
         UnauthorizedException thrown = catchThrowableOfType(
-                () -> authService.refreshAccessToken(refreshToken), UnauthorizedException.class);
+                () -> authService.refreshAccessToken(refreshToken, CLIENT_IP),
+                UnauthorizedException.class);
 
         assertThat(thrown.getStatus()).isEqualTo(HttpStatus.UNAUTHORIZED);
         assertThat(thrown.getCode()).isEqualTo("UNAUTHORIZED");
@@ -334,7 +343,7 @@ class AuthServiceTest {
 
     @Test
     void refreshAccessToken_tokenNull() {
-        assertThatThrownBy(() -> authService.refreshAccessToken(null))
+        assertThatThrownBy(() -> authService.refreshAccessToken(null, CLIENT_IP))
                 .isInstanceOf(NullPointerException.class)
                 .hasMessage("refreshToken must not be null");
     }

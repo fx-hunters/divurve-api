@@ -16,6 +16,9 @@ import com.divurve.domain.RepositoryTestBase;
 import com.divurve.domain.forecast.ForecastService;
 import com.divurve.domain.fx.PerUnitFxRates;
 import com.divurve.domain.goal.GoalRepository;
+import com.divurve.domain.master.CurrencyPairRepository;
+import com.divurve.domain.master.CurrencyRepository;
+import com.divurve.domain.master.MasterDataService;
 import com.divurve.domain.goal.GoalService;
 import com.divurve.domain.goal.GoalType;
 import com.divurve.domain.goal.entity.Goal;
@@ -84,6 +87,12 @@ class PlannerEndToEndIntegrationTest extends RepositoryTestBase {
     private UserRepository userRepository;
 
     @Autowired
+    private CurrencyRepository currencyRepository;
+
+    @Autowired
+    private CurrencyPairRepository currencyPairRepository;
+
+    @Autowired
     private EntityManager entityManager;
 
     private PlanController controller;
@@ -107,8 +116,13 @@ class PlannerEndToEndIntegrationTest extends RepositoryTestBase {
 
         ExchangeCostCalculator exchangeCostCalculator = new ExchangeCostCalculator();
         EqualSplitAllocator equalSplitAllocator = new EqualSplitAllocator();
+        // 통화 마스터는 마이그레이션 시드가 채운 실제 표를 읽는다(이슈 #111). 하드코딩 상수였을 때와
+        // 같은 값이 나오는지가 이 테스트의 기대 수치로 그대로 검증된다.
+        MasterDataService masterDataService =
+                new MasterDataService(currencyRepository, currencyPairRepository);
         PlanCalculationService calculationService = new PlanCalculationService(
-                new PlanRateContextProvider(perUnitFxRates, forecastService, CLOCK),
+                new PlanRateContextProvider(
+                        perUnitFxRates, forecastService, masterDataService, CLOCK),
                 new BusinessDayCalendar(),
                 new RoundScheduleGenerator(),
                 equalSplitAllocator,
@@ -132,7 +146,7 @@ class PlannerEndToEndIntegrationTest extends RepositoryTestBase {
                 new PlanStepExecutionService(
                         planRepository, planStepRepository,
                         new SkipRedistributor(equalSplitAllocator), exchangeCostCalculator,
-                        adjustmentOptionSelector, CLOCK),
+                        adjustmentOptionSelector, masterDataService, CLOCK),
                 new PlanAllocationGuard(goalRepository, goalService),
                 new PlanScenarioService(
                         planRepository, planStepRepository, calculationService,

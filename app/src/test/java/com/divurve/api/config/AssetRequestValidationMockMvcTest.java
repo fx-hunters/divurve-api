@@ -23,6 +23,7 @@ import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
+import com.divurve.domain.user.AdminAccessService;
 
 /**
  * 이슈 #75 — {@code POST /holdings}·{@code POST /deposits} 의 필수 필드({@code currency_code} 등)
@@ -39,6 +40,13 @@ class AssetRequestValidationMockMvcTest {
 
     @Autowired
     private MockMvc mockMvc;
+
+    /**
+     * {@code WebAuthConfig} 가 관리자 리졸버를 배선하면서 이 빈을 요구한다 (이슈 #111).
+     * 이 테스트는 관리자 경로를 다루지 않지만, 없으면 컨텍스트 자체가 뜨지 않는다.
+     */
+    @MockBean
+    private AdminAccessService adminAccessService;
 
     @MockBean
     private HoldingService holdingService;
