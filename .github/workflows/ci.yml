@@ -13,6 +13,39 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/develop' }}
 
 jobs:
+  # 마이그레이션 순서 검사 (이슈 #104).
+  #
+  # build 잡과 분리한 이유는 이 검사만 base 브랜치와의 '비교' 가 필요해서다 — 리포 안의 파일만
+  # 보는 테스트로는 판정할 수 없다. Testcontainers 는 매번 빈 DB 에 V1 부터 적용하므로 번호가
+  # 순서를 어겨도 통과한다. 그 사각지대에서 2026-09-07 배포가 죽었다.
+  migration-order:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # 전체 이력을 받아야 base 브랜치를 비교할 수 있다 (기본 depth=1 로는 불가).
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve base ref
+        id: base
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "ref=origin/${{ github.base_ref }}" >> "$GITHUB_OUTPUT"
+          else
+            # push 이벤트: 이 push 직전 상태와 비교한다. 첫 커밋이면 비교 대상이 없어 건너뛴다.
+            echo "ref=${{ github.event.before }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check Flyway migration ordering
+        run: |
+          BASE='${{ steps.base.outputs.ref }}'
+          if ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            echo "비교할 base 커밋이 없다 ($BASE) — 검사를 건너뛴다."
+            exit 0
+          fi
+          ./scripts/check-migration-order.sh "$BASE"
+
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 20

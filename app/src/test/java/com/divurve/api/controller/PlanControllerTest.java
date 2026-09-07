@@ -294,7 +294,7 @@ class PlanControllerTest {
         PlanResponse data = controller.getActivePlan(USER_ID, GOAL_ID.toString()).data();
 
         assertThat(data.goal().roundBudgetKrw()).isEqualTo(500_000L);
-        // V13 이전 계획처럼 계산 메타가 없으면 값을 지어내지 않고 비운다
+        // V16 이전 계획처럼 계산 메타가 없으면 값을 지어내지 않고 비운다
         assertThat(data.calculationMeta()).isNull();
     }
 
