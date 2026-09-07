@@ -6,6 +6,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Optional;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -50,4 +51,31 @@ public interface FxRateRepository extends JpaRepository<FxRate, FxRateId> {
     /** 차트용 시계열 — 한 통화쌍·종류의 기간 구간을 오래된 순으로 반환한다. */
     List<FxRate> findByIdPairCodeAndIdRateTypeAndIdQuoteDateBetweenOrderByIdQuoteDateAsc(
             String pairCode, String rateType, LocalDate from, LocalDate to);
+
+    /**
+     * 구멍 판정용 — 구간 안에서 값이 있는 날짜만 뽑는다 (이슈 #116).
+     *
+     * <p>엔티티를 통째로 들고 오지 않는 이유는 5년치(약 1,300행) × 4쌍을 요청마다 훑기 때문이다.
+     * 판정에 필요한 것은 날짜 집합뿐이다.
+     */
+    @Query("""
+            select r.id.quoteDate from FxRate r
+            where r.id.pairCode = :pairCode
+              and r.id.rateType = :rateType
+              and r.id.quoteDate between :from and :to
+            """)
+    List<LocalDate> findQuoteDates(
+            @Param("pairCode") String pairCode,
+            @Param("rateType") String rateType,
+            @Param("from") LocalDate from,
+            @Param("to") LocalDate to);
+
+    /**
+     * 가장 최근 관측 하나 (이슈 #116). 최신 환율 읽기 경로가 신선도를 판단하는 근거다.
+     *
+     * <p>{@code to} 를 받는 이유는 미래 날짜가 섞여 들어오는 것을 막기 위해서다 — ECOS 정정이
+     * 앞선 날짜로 들어오는 일은 없지만, 기준일을 고정해야 같은 요청이 같은 값을 준다.
+     */
+    Optional<FxRate> findTopByIdPairCodeAndIdRateTypeAndIdQuoteDateLessThanEqualOrderByIdQuoteDateDesc(
+            String pairCode, String rateType, LocalDate to);
 }

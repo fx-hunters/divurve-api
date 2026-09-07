@@ -1,12 +1,15 @@
 package com.divurve.api.controller.admin;
 
 import com.divurve.api.config.auth.CurrentAdmin;
+import com.divurve.api.dto.admin.AdminFxRateBackfillResponse;
+import com.divurve.api.dto.admin.AdminFxRateCoverageResponse;
 import com.divurve.api.dto.admin.AdminFxRateSeriesResponse;
 import com.divurve.api.dto.admin.AdminMacroRefreshRequest;
 import com.divurve.api.dto.admin.AdminMacroRefreshResponse;
 import com.divurve.api.dto.admin.AdminRefreshResponse;
 import com.divurve.common.architecture.WebAdapter;
 import com.divurve.common.response.ApiResponse;
+import com.divurve.domain.fx.FxRateGapService;
 import com.divurve.domain.fx.FxRateQueryService;
 import com.divurve.domain.fx.FxRateRefreshService;
 import com.divurve.domain.macro.MacroRefreshService;
@@ -15,6 +18,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import java.time.Clock;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.UUID;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -31,6 +35,9 @@ import org.springframework.web.bind.annotation.RestController;
  *
  * <p>갱신 응답에는 반영 건수·소요 시간·실패 사유가 값으로 담긴다. 성공 여부만 알려 주면
  * "갱신했는데 왜 값이 그대로인가" 를 화면에서 알 수 없다.
+ *
+ * <p>구멍 조회·백필이 함께 있다 (이슈 #116). 읽기 경로가 저장분을 신뢰하는 조건이 "구간이
+ * 완전한가" 이므로, 그 조건을 눈으로 확인하고 손으로 고칠 수 있어야 전환이 운영 가능해진다.
  */
 @WebAdapter
 @RestController
@@ -46,16 +53,19 @@ public class AdminFxRateController {
 
     private final FxRateQueryService fxRateQueryService;
     private final FxRateRefreshService fxRateRefreshService;
+    private final FxRateGapService fxRateGapService;
     private final MacroRefreshService macroRefreshService;
     private final Clock clock;
 
     public AdminFxRateController(
             FxRateQueryService fxRateQueryService,
             FxRateRefreshService fxRateRefreshService,
+            FxRateGapService fxRateGapService,
             MacroRefreshService macroRefreshService,
             Clock clock) {
         this.fxRateQueryService = fxRateQueryService;
         this.fxRateRefreshService = fxRateRefreshService;
+        this.fxRateGapService = fxRateGapService;
         this.macroRefreshService = macroRefreshService;
         this.clock = clock;
     }
@@ -86,6 +96,48 @@ public class AdminFxRateController {
         int lookback = lookbackDays == null ? DEFAULT_REFRESH_LOOKBACK_DAYS : lookbackDays;
         return ApiResponse.of(AdminRefreshResponse.from(
                 fxRateRefreshService.refresh(LocalDate.now(clock), lookback)));
+    }
+
+    @Operation(summary = "환율 구멍 조회",
+            description = "영업일 달력과 대조해 빠진 구간을 돌려준다. pair_code 를 비우면 저장 대상 전부를 본다. "
+                    + "백필을 한 번 돌린 뒤 남은 구멍은 공휴일이 아니라 우리가 못 받은 날이다.")
+    @GetMapping("/fx-rates/gaps")
+    public ApiResponse<AdminFxRateCoverageResponse> gaps(
+            @CurrentAdmin UUID adminId,
+            @RequestParam(value = "pair_code", required = false) String pairCode,
+            @RequestParam(value = "from", required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam(value = "to", required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
+        LocalDate end = to == null ? LocalDate.now(clock) : to;
+        LocalDate start = from == null ? end.minusDays(DEFAULT_RANGE_DAYS) : from;
+        List<FxRateGapService.PairCoverage> coverages = pairCode == null || pairCode.isBlank()
+                ? fxRateGapService.coverageOfStoredPairs(start, end)
+                : List.of(fxRateGapService.coverage(pairCode, start, end));
+        return ApiResponse.of(AdminFxRateCoverageResponse.from(coverages));
+    }
+
+    @Operation(summary = "환율 구멍 백필",
+            description = "빠진 구간만 ECOS 에서 다시 받아 메운다(전체 재적재가 아니다). "
+                    + "ECOS 도 값이 없는 날짜는 고시 부재로 확정해 다음 판정에서 구멍으로 세지 않는다. "
+                    + "초기 5년 백필도 이 경로를 쓴다.")
+    @PostMapping("/fx-rates/backfill")
+    public ApiResponse<AdminFxRateBackfillResponse> backfill(
+            @CurrentAdmin UUID adminId,
+            @RequestParam(value = "pair_code", required = false) String pairCode,
+            @RequestParam(value = "from", required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam(value = "to", required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
+        LocalDate end = to == null ? LocalDate.now(clock) : to;
+        LocalDate start = from == null ? end.minusDays(DEFAULT_RANGE_DAYS) : from;
+        if (pairCode == null || pairCode.isBlank()) {
+            return ApiResponse.of(AdminFxRateBackfillResponse.from(
+                    fxRateGapService.backfillStoredPairs(start, end)));
+        }
+        FxRateGapService.PairBackfill one = fxRateGapService.backfill(pairCode, start, end);
+        return ApiResponse.of(AdminFxRateBackfillResponse.from(
+                new FxRateGapService.BackfillReport(List.of(one), clock.instant())));
     }
 
     @Operation(summary = "FRED 거시지표 수동 갱신",
