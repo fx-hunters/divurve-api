@@ -100,6 +100,14 @@ class DemoSeedXrayIntegrationTest extends RepositoryTestBase {
     }
 
     @Test
+    @DisplayName("시드된 자산은 is_sample_data=true 로 조회된다 — 체험용 데이터 배지의 근거")
+    void 시드된_자산은_샘플로_표시된다() {
+        UUID demoUserId = createDemoSession();
+
+        assertThat(xrayService().getPortfolio(demoUserId).sampleData()).isTrue();
+    }
+
+    @Test
     @DisplayName("JPY 는 원/100엔 고시를 접어 반영한다 — 접지 않으면 380,000,000 원으로 100배가 된다")
     void JPY_고시_단위가_정규화된다() {
         UUID demoUserId = createDemoSession();
@@ -132,6 +140,7 @@ class DemoSeedXrayIntegrationTest extends RepositoryTestBase {
                 depositRepository,
                 krwAssetRepository,
                 goalRepository,
+                userRepository,
                 riskProfileService(),
                 CLOCK);
         new AuthDemoService(userRepository, seeder, tokenProvider).createDemoSession();

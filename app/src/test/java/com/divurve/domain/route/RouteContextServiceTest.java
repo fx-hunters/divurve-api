@@ -68,7 +68,7 @@ class RouteContextServiceTest {
         when(xrayService.getPortfolio(USER_ID)).thenReturn(new XrayService.PortfolioSnapshot(
                 10_000_000L, 6_000_000L, 4_000_000L, 0.4,
                 Map.of("USD", 4_000_000L), Map.of("USD", 1.0),
-                null, null, null));
+                null, null, null, false));
         when(planRateContextProvider.resolve(any(), anyString())).thenReturn(new PlanRateContext(
                 "USD", 1300.0, 1350.0, 1400.0, 0.0175, 3000L, 1, 2,
                 Instant.parse("2026-09-04T00:00:00Z"), Instant.parse("2026-09-04T00:00:00Z"), true));

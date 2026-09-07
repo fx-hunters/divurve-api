@@ -92,7 +92,7 @@ class HomeSummaryServiceTest {
                 Map.of("USD", 24_720_000L), Map.of("USD", 1.0),
                 new ConcentrationView("USD", 0.639, 0.60, "risk_profile.balanced", "above_threshold", 0.039),
                 new SensitivityView(247_200L, Map.of("USD", 247_200L)),
-                84_000L);
+                84_000L, false);
     }
 
     private PortfolioSnapshot portfolioWithoutFx() {
@@ -100,7 +100,7 @@ class HomeSummaryServiceTest {
                 0L, 0L, 0L, 0.0, Map.of(), Map.of(),
                 new ConcentrationView(null, null, null, null, "unknown", null),
                 new SensitivityView(0L, Map.of()),
-                null);
+                null, false);
     }
 
     private RiskProfileView riskProfileDiagnosed() {

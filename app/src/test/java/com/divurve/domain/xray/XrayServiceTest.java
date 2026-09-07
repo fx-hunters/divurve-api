@@ -85,6 +85,29 @@ class XrayServiceTest {
     // --- GET /xray (명세 §5.3) ---
 
     @Test
+    @DisplayName("샘플 시드를 받은 사용자는 sample_data=true 로 나간다 — is_demo 와 다른 사실이다")
+    void 샘플_시드_여부가_스냅샷에_실린다() {
+        User seeded = User.create("seeded@divurve.com", "샘플", null);
+        seeded.markSampleDataSeeded();
+        when(userRepository.findById(userId)).thenReturn(Optional.of(seeded));
+        givenEmptyPortfolio();
+        givenRiskGrade("balanced");
+
+        assertThat(service().getPortfolio(userId).sampleData()).isTrue();
+    }
+
+    @Test
+    @DisplayName("직접 입력한 사용자는 sample_data=false 다")
+    void 시드를_받지_않았으면_샘플이_아니다() {
+        givenUser();
+        givenEmptyPortfolio();
+        givenRiskGrade("balanced");
+
+        assertThat(service().getPortfolio(userId).sampleData()).isFalse();
+    }
+
+
+    @Test
     @DisplayName("명세 §4 fixture — 총자산 68,400,000 / 외화 24,720,000 / 비중 0.3614 / 민감도 합 247,200")
     void fixture_외화비중과_민감도를_재현한다() {
         givenUser();
@@ -306,6 +329,13 @@ class XrayServiceTest {
      * 명세 §4 fixture 를 그대로 재현한다: 원화 43,680,000 / USD 15,790,000 · JPY 5,470,000 ·
      * EUR 3,460,000. 원화 환산액이 fixture 와 정확히 맞도록 예금 금액을 환율에서 역산했다.
      */
+    /** 자산이 하나도 없는 상태 — 샘플 여부처럼 자산과 무관한 사실만 볼 때 쓴다. */
+    private void givenEmptyPortfolio() {
+        when(holdingRepository.findByOwner_Id(userId)).thenReturn(List.of());
+        when(depositRepository.findByOwner_Id(userId)).thenReturn(List.of());
+        when(krwAssetRepository.findByOwner_Id(userId)).thenReturn(List.of());
+    }
+
     private void givenFixturePortfolio() {
         when(holdingRepository.findByOwner_Id(userId)).thenReturn(List.of());
         when(depositRepository.findByOwner_Id(userId)).thenReturn(List.of(

@@ -39,7 +39,12 @@ public record XrayResponse(
         @JsonProperty("sensitivity_1pct") Sensitivity sensitivity1pct,
 
         @Schema(description = "전일 대비 변화(원). 스냅샷이 없으면 null", example = "84000", nullable = true)
-        Long dayChangeKrw) {
+        Long dayChangeKrw,
+
+        @Schema(description = "이 자산이 시드된 샘플인지. 화면의 '체험용 데이터' 배지 판정 근거다. "
+                + "계정이 둘러보기인지(meta.is_demo)와는 다른 사실이며, 실연동이 없는 동안에는 "
+                + "일반 가입 계정도 true 다(이슈 #108·#112)", example = "true")
+        boolean isSampleData) {
 
     /** 통화별 노출 금액과 비중. */
     @Schema(description = "통화별 노출")

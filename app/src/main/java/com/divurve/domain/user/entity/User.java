@@ -45,6 +45,16 @@ public class User {
     @Column(name = "onboarded_at")
     private Instant onboardedAt;
 
+    /**
+     * 이 사용자의 자산이 시드된 샘플인지 (이슈 #112).
+     *
+     * <p>{@link #isDemo} 와 다른 사실이다 — {@code isDemo} 는 <b>계정의 성격</b>(둘러보기인가)이고,
+     * 이 값은 <b>자산의 출처</b>(샘플인가)다. 실연동이 없는 동안에는 일반 가입 계정도 같은 샘플을
+     * 받으므로(이슈 #108) 둘이 갈린다. 프론트의 "체험용 데이터" 배지는 이 값을 본다.
+     */
+    @Column(name = "sample_data_seeded", nullable = false)
+    private boolean sampleDataSeeded;
+
     @Generated(event = EventType.INSERT)
     @Column(name = "created_at", insertable = false, updatable = false)
     private Instant createdAt;
@@ -93,6 +103,16 @@ public class User {
 
     public boolean isDemo() {
         return isDemo;
+    }
+
+    /** 이 사용자의 자산이 시드된 샘플인지. 직접 입력하거나 실연동으로 불러온 자산이면 false 다. */
+    public boolean isSampleDataSeeded() {
+        return sampleDataSeeded;
+    }
+
+    /** 샘플 시드를 받았음을 기록한다. {@code SampleDataSeeder} 만 호출한다. */
+    public void markSampleDataSeeded() {
+        this.sampleDataSeeded = true;
     }
 
     public Instant getCreatedAt() {
