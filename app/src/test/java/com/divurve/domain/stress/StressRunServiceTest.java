@@ -1,5 +1,6 @@
 package com.divurve.domain.stress;
 
+import com.divurve.domain.fx.StoredFxRates;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -81,7 +82,7 @@ class StressRunServiceTest {
                 userRepository,
                 holdingRepository,
                 depositRepository,
-                new FxAssetValuator(new PerUnitFxRates(fxRateProvider, new QuoteUnitNormalizer())),
+                new FxAssetValuator(new PerUnitFxRates(StoredFxRates.NONE, fxRateProvider, new QuoteUnitNormalizer())),
                 new StressCalculator(),
                 Clock.fixed(TODAY.atStartOfDay().toInstant(ZoneOffset.UTC), ZoneOffset.UTC));
     }

@@ -1,5 +1,6 @@
 package com.divurve.domain.fit;
 
+import com.divurve.domain.fx.StoredFxRates;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.entry;
@@ -67,7 +68,7 @@ class FitServiceTest {
                 depositRepository,
                 userRepository,
                 riskProfileService,
-                new FxAssetValuator(new PerUnitFxRates(fxRateProvider, new QuoteUnitNormalizer())),
+                new FxAssetValuator(new PerUnitFxRates(StoredFxRates.NONE, fxRateProvider, new QuoteUnitNormalizer())),
                 new WeightCalculator(),
                 new ConcentrationCalculator(),
                 new ConcentrationThresholdTable(),

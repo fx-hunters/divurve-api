@@ -1,5 +1,6 @@
 package com.divurve.domain.holding;
 
+import com.divurve.domain.fx.StoredFxRates;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.entry;
@@ -38,7 +39,7 @@ class FxAssetValuatorTest {
     private final User user = User.createDemo("me@divurve.com", "나");
 
     private FxAssetValuator valuator() {
-        return new FxAssetValuator(new PerUnitFxRates(fxRateProvider, new QuoteUnitNormalizer()));
+        return new FxAssetValuator(new PerUnitFxRates(StoredFxRates.NONE, fxRateProvider, new QuoteUnitNormalizer()));
     }
 
     @Test

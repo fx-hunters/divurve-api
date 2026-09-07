@@ -3,6 +3,7 @@ package com.divurve.domain.forecast;
 import com.divurve.common.architecture.UseCase;
 import com.divurve.common.exception.InvalidRequestException;
 import com.divurve.domain.fx.PerUnitFxRates;
+import com.divurve.domain.fx.StoredFxRates;
 import com.divurve.domain.port.FxRateHistoryProvider;
 import com.divurve.domain.port.FxRateHistoryProvider.HistoryRateSnapshot;
 import com.divurve.engine.fx.CrossRateDeriver;
@@ -12,6 +13,7 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 
 /**
  * 통화쌍 환율 조회 — 고시가 없는 쌍은 원화 크로스에서 유도한다 (이슈 #57).
@@ -41,16 +43,19 @@ public class CrossRateResolver {
     /** 어댑터가 직접 고시하는 표시통화. 이 통화가 표시통화면 유도 없이 그대로 조회한다. */
     private static final String QUOTED_AGAINST = "KRW";
 
+    private final StoredFxRates storedFxRates;
     private final FxRateHistoryProvider historyProvider;
     private final PerUnitFxRates perUnitFxRates;
     private final CrossRateDeriver crossRateDeriver;
     private final QuoteUnitNormalizer quoteUnitNormalizer;
 
     public CrossRateResolver(
+            StoredFxRates storedFxRates,
             FxRateHistoryProvider historyProvider,
             PerUnitFxRates perUnitFxRates,
             CrossRateDeriver crossRateDeriver,
             QuoteUnitNormalizer quoteUnitNormalizer) {
+        this.storedFxRates = Objects.requireNonNull(storedFxRates, "storedFxRates");
         this.historyProvider = Objects.requireNonNull(historyProvider, "historyProvider");
         this.perUnitFxRates = Objects.requireNonNull(perUnitFxRates, "perUnitFxRates");
         this.crossRateDeriver = Objects.requireNonNull(crossRateDeriver, "crossRateDeriver");
@@ -113,9 +118,31 @@ public class CrossRateResolver {
                 .toList();
     }
 
-    /** 통화의 원화 크로스를 받아 1통화 단위 기준으로 접는다 (JPY 는 원/100엔 고시). */
+    /**
+     * 통화의 1통화 단위 기준 시계열을 만든다.
+     *
+     * <p>저장분이 그 구간을 <b>빠짐없이</b> 갖고 있으면 그것을 쓰고, 아니면 ECOS 를 실시간
+     * 호출한다 (이슈 #116). 부분 데이터를 이어 붙이지 않는 것이 핵심이다 — 5년 백분위는 빠진
+     * 날짜를 예외 없이 흡수해 버려서, 틀린 값이 조용히 나간다.
+     *
+     * <p>유도 쌍은 통화 두 개를 각각 이 메서드로 가져오므로 한쪽은 저장분, 다른 쪽은 실시간이
+     * 될 수 있다. 두 값 모두 출처가 ECOS 인 같은 날짜의 종가이므로 섞여도 수치가 갈라지지 않고,
+     * 조달 단위를 통화별로 두는 편이 "한 통화의 구멍 때문에 나머지까지 실시간으로 끌려가는" 것보다
+     * 낫다.
+     *
+     * <p>ECOS 경로에서만 {@link QuoteUnitNormalizer} 를 태운다 — 저장분은 적재 시점에 이미
+     * 1단위로 접혀 있다(JPY 는 원/100엔 고시).
+     */
     private List<DatedRate> perUnitSeries(
             String currencyCode, LocalDate endDate, int lookbackCalendarDays) {
+        Optional<List<StoredFxRates.Point>> stored =
+                storedFxRates.perUnitSeries(currencyCode, endDate, lookbackCalendarDays);
+        if (stored.isPresent()) {
+            return stored.get().stream()
+                    .map(point -> new DatedRate(point.date(), point.perUnitRate().doubleValue()))
+                    .toList();
+        }
+
         List<HistoryRateSnapshot> quoted = historyProvider.fetchHistorical(
                 currencyCode + "_" + QUOTED_AGAINST, endDate, lookbackCalendarDays);
         if (quoted == null) {
