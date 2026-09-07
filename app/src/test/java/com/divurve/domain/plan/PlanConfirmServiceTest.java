@@ -212,6 +212,73 @@ class PlanConfirmServiceTest extends RepositoryTestBase {
     }
 
     @Test
+    @DisplayName("draft 저장은 활성 계획을 건드리지 않는다 — 불변조건 §21-9")
+    void saveDraft_LeavesActivePlanAlone() {
+        Goal goal = newGoal();
+        PlanConfirmService service = service();
+        Plan active = service.confirm(goal.getId(), draft(2), null);
+        entityManager.flush();
+        entityManager.clear();
+
+        Plan saved = service.saveDraft(goal.getId(), draft(3), "RATE_UP");
+        entityManager.flush();
+        entityManager.clear();
+
+        assertThat(saved.getStatus()).isEqualTo(PlanStatus.DRAFT);
+        assertThat(saved.getReason()).isEqualTo("RATE_UP");
+        assertThat(planStepRepository.findByPlan_IdOrderBySeqAsc(saved.getId())).hasSize(3);
+
+        Plan reloadedActive = planRepository.findById(active.getId()).orElseThrow();
+        assertThat(reloadedActive.getStatus()).isEqualTo(PlanStatus.ACTIVE);
+        assertThat(reloadedActive.getSupersededBy()).isNull();
+    }
+
+    @Test
+    @DisplayName("draft 는 버전 번호를 소모하지 않는다 — 미리보기를 눌러도 이력에 구멍이 나지 않는다")
+    void saveDraft_DoesNotConsumeVersionNumber() {
+        Goal goal = newGoal();
+        PlanConfirmService service = service();
+        service.confirm(goal.getId(), draft(1), null);
+        entityManager.flush();
+
+        service.saveDraft(goal.getId(), draft(1), "RATE_UP");
+        service.saveDraft(goal.getId(), draft(1), "RATE_DOWN");
+        entityManager.flush();
+
+        // 미리보기를 두 번 눌렀어도 다음 확정 버전은 2 다.
+        assertThat(service.nextVersion(goal.getId())).isEqualTo(2);
+        assertThat(service.confirm(goal.getId(), draft(1), "적용").getVersion()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("계획이 하나도 없으면 첫 버전은 1 이다")
+    void nextVersion_StartsAtOne() {
+        assertThat(service().nextVersion(newGoal().getId())).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("없는 목표에는 draft 도 저장하지 않는다")
+    void saveDraft_UnknownGoal_Throws() {
+        UUID unknownId = UUID.randomUUID();
+        PlanDraft draft = draft(1);
+        PlanConfirmService service = service();
+
+        assertThatThrownBy(() -> service.saveDraft(unknownId, draft, "RATE_UP"))
+                .isInstanceOf(NotFoundException.class);
+    }
+
+    @Test
+    @DisplayName("null draft 는 저장하지 않는다")
+    void saveDraft_NullDraft_Throws() {
+        Goal goal = newGoal();
+        PlanConfirmService service = service();
+        UUID goalId = goal.getId();
+
+        assertThatThrownBy(() -> service.saveDraft(goalId, null, null))
+                .isInstanceOf(NullPointerException.class);
+    }
+
+    @Test
     @DisplayName("null 인자와 의존은 거부한다")
     void nullArguments_Throw() {
         Goal goal = newGoal();

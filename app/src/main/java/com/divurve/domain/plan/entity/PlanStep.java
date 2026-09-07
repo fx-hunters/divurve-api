@@ -241,6 +241,39 @@ public class PlanStep {
     }
 
     /**
+     * 회차 번호를 다시 매긴다 (명세 §18·§21-11).
+     *
+     * <p>변경 계획을 적용할 때 과거 완료 회차를 새 버전 앞쪽에 복사하면서, 새로 계산된 회차를
+     * 그만큼 뒤로 밀어야 한다. {@code uq_plan_steps_plan_seq} 가 한 계획 안의 번호 중복을
+     * 막으므로 밀지 않으면 저장이 실패한다.
+     *
+     * @param newSeq 새 회차 번호 (1 이상)
+     * @throws IllegalArgumentException 1 미만인 경우
+     */
+    public void reassignSeq(int newSeq) {
+        if (newSeq < 1) {
+            throw new IllegalArgumentException("회차 번호는 1 이상이어야 합니다: " + newSeq);
+        }
+        this.seq = newSeq;
+    }
+
+    /**
+     * 실행 결과(환율·실행일)만 옮겨 적는다 (명세 §21-11).
+     *
+     * <p>과거 회차를 새 버전으로 복사할 때 쓴다. {@link #markAsCompleted} 를 쓰지 않는 이유는
+     * 그 메서드가 <b>상태 전이</b>라서다 — 복사본은 이미 완료·건너뜀 상태로 생성되므로 전이
+     * 가드에 걸린다. {@code executionKey} 는 일부러 옮기지 않는다: 유니크 인덱스에 걸릴 뿐
+     * 아니라, 원본에 남아 있어야 버전 교체 뒤의 중복 완료 요청을 잡아낸다 (§21-12).
+     *
+     * @param rate 실행 환율
+     * @param date 실행일
+     */
+    public void recordExecutionOutcome(Double rate, LocalDate date) {
+        this.executedRate = rate;
+        this.executedDate = date;
+    }
+
+    /**
      * 아직 실행되지 않은 회차인지 확인. 완료·건너뛰기의 출발점이다.
      *
      * @return scheduled 또는 due 상태면 true

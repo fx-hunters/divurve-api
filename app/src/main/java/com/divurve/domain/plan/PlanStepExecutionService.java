@@ -5,8 +5,15 @@ import static java.util.Objects.requireNonNull;
 import com.divurve.common.architecture.UseCase;
 import com.divurve.common.exception.InvalidRequestException;
 import com.divurve.common.exception.NotFoundException;
+import com.divurve.domain.goal.PriorityConstraint;
 import com.divurve.domain.goal.entity.Goal;
+import com.divurve.domain.plan.entity.Plan;
+import com.divurve.domain.plan.entity.PlanCalculationMeta;
 import com.divurve.domain.plan.entity.PlanStep;
+import com.divurve.engine.planner.AdjustmentOption;
+import com.divurve.engine.planner.AdjustmentOptionSelector;
+import com.divurve.engine.planner.ExchangeCostCalculator;
+import com.divurve.engine.planner.PriorityDimension;
 import com.divurve.engine.planner.SkipRedistribution;
 import com.divurve.engine.planner.SkipRedistributor;
 import java.math.BigDecimal;
@@ -36,16 +43,23 @@ public class PlanStepExecutionService {
     private final PlanRepository planRepository;
     private final PlanStepRepository planStepRepository;
     private final SkipRedistributor skipRedistributor;
+    private final ExchangeCostCalculator exchangeCostCalculator;
+    private final AdjustmentOptionSelector adjustmentOptionSelector;
     private final Clock clock;
 
     public PlanStepExecutionService(
             PlanRepository planRepository,
             PlanStepRepository planStepRepository,
             SkipRedistributor skipRedistributor,
+            ExchangeCostCalculator exchangeCostCalculator,
+            AdjustmentOptionSelector adjustmentOptionSelector,
             Clock clock) {
         this.planRepository = requireNonNull(planRepository, "planRepository");
         this.planStepRepository = requireNonNull(planStepRepository, "planStepRepository");
         this.skipRedistributor = requireNonNull(skipRedistributor, "skipRedistributor");
+        this.exchangeCostCalculator = requireNonNull(exchangeCostCalculator, "exchangeCostCalculator");
+        this.adjustmentOptionSelector =
+                requireNonNull(adjustmentOptionSelector, "adjustmentOptionSelector");
         this.clock = requireNonNull(clock, "clock");
     }
 
@@ -109,7 +123,8 @@ public class PlanStepExecutionService {
     @Transactional(readOnly = true)
     public SkipPreview previewSkip(UUID planId, int seq, Goal goal) {
         Objects.requireNonNull(goal, "goal");
-        PlanStep target = requireStep(planId, seq);
+        Plan plan = requirePlan(planId);
+        PlanStep target = requireStepOf(planId, seq);
         if (!target.isOpen()) {
             throw new InvalidRequestException(
                     "이미 " + target.getStatus() + " 상태인 회차는 건너뛸 수 없습니다: seq=" + seq, "seq");
@@ -131,13 +146,71 @@ public class PlanStepExecutionService {
                 remainingRounds,
                 minorUnitsOf(goal));
 
+        Long perRoundCostKrw = perRoundCostKrw(plan, redistribution.perRoundAmount());
+        boolean overBudget = exceedsBudget(goal, perRoundCostKrw);
+
         return new SkipPreview(
                 seq,
                 target.getAmount(),
                 redistribution.perRoundAmount().doubleValue(),
                 redistribution.newRemainingAmount().doubleValue(),
                 remainingRounds,
-                remainingRounds == 0);
+                remainingRounds == 0,
+                perRoundCostKrw,
+                overBudget,
+                adjustmentOptions(goal, remainingRounds == 0 || overBudget));
+    }
+
+    /**
+     * 재분배 후 회차 하나에 드는 원화 (명세 §9.3).
+     *
+     * <p>계획이 저장될 때 쓴 환율·스프레드·수수료를 그대로 쓴다 — 지금 환율을 다시 조회하면
+     * 건너뛰기 미리보기가 <b>건너뛰기 때문이 아닌</b> 변화까지 함께 보여주게 된다. 사용자가
+     * 묻는 것은 "이 회차를 건너뛰면"이지 "지금 환율이면"이 아니다.
+     *
+     * <p>계산 메타데이터가 없는 옛 계획은 {@code null} 을 낸다 — 없는 값으로 비용을 지어내지 않는다.
+     */
+    private Long perRoundCostKrw(Plan plan, BigDecimal perRoundAmount) {
+        PlanCalculationMeta meta = plan.getCalculationMeta();
+        if (meta == null || meta.getBaseRate() == null
+                || meta.getSpreadRatio() == null || meta.getFeeKrw() == null) {
+            return null;
+        }
+        return exchangeCostCalculator.cost(
+                perRoundAmount,
+                BigDecimal.valueOf(meta.getBaseRate()),
+                meta.getSpreadRatio(),
+                meta.getFeeKrw());
+    }
+
+    /**
+     * 재분배된 회차가 사용자가 정한 예산을 넘는지 (명세 §15).
+     *
+     * <p>예산을 입력하지 않았거나 비용을 계산할 수 없으면 <b>넘지 않는다고 보지 않고 판정 자체를
+     * 하지 않는다</b> — 모르는 것을 "괜찮다"로 바꾸면 조정이 필요한 사용자에게 선택지가 가지 않는다.
+     */
+    private static boolean exceedsBudget(Goal goal, Long perRoundCostKrw) {
+        return perRoundCostKrw != null && goal.getBudgetAmount() > 0
+                && perRoundCostKrw > goal.getBudgetAmount();
+    }
+
+    /** 조정이 필요할 때만 선택지를 낸다. 필요 없는데 띄우면 사용자는 무언가 잘못됐다고 읽는다. */
+    private List<String> adjustmentOptions(Goal goal, boolean needed) {
+        if (!needed) {
+            return List.of();
+        }
+        return adjustmentOptionSelector.orderedFor(priorityDimensionOf(goal)).stream()
+                .map(AdjustmentOption::name)
+                .toList();
+    }
+
+    /** domain 문자열 상수를 engine 열거로 옮긴다. 모르는 값은 명세 기본값인 금액 우선으로 본다. */
+    private static PriorityDimension priorityDimensionOf(Goal goal) {
+        return switch (String.valueOf(goal.getPriorityConstraint())) {
+            case PriorityConstraint.DATE -> PriorityDimension.DATE;
+            case PriorityConstraint.BUDGET -> PriorityDimension.BUDGET;
+            default -> PriorityDimension.AMOUNT;
+        };
     }
 
     private Optional<PlanStep> findAlreadyApplied(String executionKey) {
@@ -147,8 +220,16 @@ public class PlanStepExecutionService {
     }
 
     private PlanStep requireStep(UUID planId, int seq) {
-        planRepository.findById(planId)
+        requirePlan(planId);
+        return requireStepOf(planId, seq);
+    }
+
+    private Plan requirePlan(UUID planId) {
+        return planRepository.findById(planId)
                 .orElseThrow(() -> new NotFoundException("계획을 찾을 수 없습니다: " + planId));
+    }
+
+    private PlanStep requireStepOf(UUID planId, int seq) {
         return planStepRepository.findByPlan_IdAndSeq(planId, seq)
                 .orElseThrow(() -> new NotFoundException("회차를 찾을 수 없습니다: seq=" + seq));
     }
@@ -235,6 +316,9 @@ public class PlanStepExecutionService {
      * @param remainingAmount     재분배 후 남은 외화
      * @param remainingRounds     재분배를 받을 회차 수
      * @param exhausted           남은 회차가 없어 재분배할 곳이 없는지 — 조정이 불가피하다 (§21-8)
+     * @param perRoundCostKrw     재분배 후 회차당 예상 원화. 계산 근거가 없으면 {@code null}
+     * @param exceedsBudget       재분배된 회차가 사용자의 예산을 넘는지 (§15)
+     * @param adjustmentOptions   조정 선택지 (§15·§17). 조정이 필요 없으면 빈 목록
      */
     public record SkipPreview(
             int seq,
@@ -242,6 +326,13 @@ public class PlanStepExecutionService {
             double amountAfter,
             double remainingAmount,
             int remainingRounds,
-            boolean exhausted) {
+            boolean exhausted,
+            Long perRoundCostKrw,
+            boolean exceedsBudget,
+            List<String> adjustmentOptions) {
+
+        public SkipPreview {
+            adjustmentOptions = List.copyOf(Objects.requireNonNull(adjustmentOptions, "adjustmentOptions"));
+        }
     }
 }

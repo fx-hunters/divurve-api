@@ -189,6 +189,25 @@ public class Plan {
         this.status = PlanStatus.ACTIVE;
     }
 
+    /**
+     * 적용 시점에 버전 번호를 다시 매긴다 (명세 §21-10).
+     *
+     * <p>draft 는 저장될 때 "지금 적용하면 붙을 번호"를 임시로 갖는다. 그 사이 다른 변경안이
+     * 적용되면 그 번호는 이미 쓰인 번호가 되므로, 승격하는 순간 다시 정한다. 생성자가 아니라
+     * 별도 메서드로 두는 이유는 이것이 <b>적용 전이의 일부</b>라서다 — draft 를 만들 때 쓰라고
+     * 열어 둔 문이 아니다.
+     *
+     * @param version 새 버전 번호 (1 이상)
+     * @throws IllegalStateException draft 가 아닌 계획의 버전을 바꾸려 한 경우
+     */
+    public void assignVersion(int version) {
+        if (!isDraft()) {
+            throw new IllegalStateException(
+                    "draft 가 아닌 계획의 버전은 바꿀 수 없습니다: status=" + status);
+        }
+        this.version = version;
+    }
+
     /** 테스트용 id 설정 ({@code Goal.setIdForTest} 와 같은 용도). */
     public void setIdForTest(UUID testId) {
         this.id = testId;

@@ -10,11 +10,15 @@ import static org.mockito.Mockito.when;
 
 import com.divurve.common.exception.InvalidRequestException;
 import com.divurve.common.exception.NotFoundException;
+import com.divurve.domain.goal.PriorityConstraint;
 import com.divurve.domain.goal.entity.Goal;
 import com.divurve.domain.plan.entity.Plan;
+import com.divurve.domain.plan.entity.PlanCalculationMeta;
 import com.divurve.domain.plan.entity.PlanStep;
 import com.divurve.domain.user.entity.User;
+import com.divurve.engine.planner.AdjustmentOptionSelector;
 import com.divurve.engine.planner.EqualSplitAllocator;
+import com.divurve.engine.planner.ExchangeCostCalculator;
 import com.divurve.engine.planner.SkipRedistributor;
 import java.time.Clock;
 import java.time.LocalDate;
@@ -53,7 +57,8 @@ class PlanStepExecutionServiceTest {
         planStepRepository = mock(PlanStepRepository.class);
         service = new PlanStepExecutionService(
                 planRepository, planStepRepository,
-                new SkipRedistributor(new EqualSplitAllocator()), CLOCK);
+                new SkipRedistributor(new EqualSplitAllocator()),
+                new ExchangeCostCalculator(), new AdjustmentOptionSelector(), CLOCK);
 
         User owner = User.createDemo("a@b.com", "사용자");
         goal = Goal.builder(owner, "여행 자금", "onetime", "travel", "USD")
@@ -340,21 +345,174 @@ class PlanStepExecutionServiceTest {
         }
     }
 
+    @Nested
+    @DisplayName("건너뛰기 후 예산 초과와 조정 선택지 (명세 §15·§17)")
+    class SkipAdjustments {
+
+        private Plan planWithMeta() {
+            Plan withMeta = Plan.builder(goal, 1)
+                    .status(PlanStatus.ACTIVE)
+                    .calculationMeta(PlanCalculationMeta.builder("v1")
+                            .rates(1300.0, 1350.0, 1400.0)
+                            .spreadRatio(0.01)
+                            .feeKrw(10_000L)
+                            .quoteUnit(1)
+                            .build())
+                    .build();
+            when(planRepository.findById(PLAN_ID)).thenReturn(Optional.of(withMeta));
+            return withMeta;
+        }
+
+        private PlanStepExecutionService.SkipPreview previewWith(PlanStep... steps) {
+            when(planStepRepository.findByPlan_IdAndSeq(PLAN_ID, 1))
+                    .thenReturn(Optional.of(steps[0]));
+            when(planStepRepository.findByPlan_IdOrderBySeqAsc(PLAN_ID)).thenReturn(List.of(steps));
+            return service.previewSkip(PLAN_ID, 1, goal);
+        }
+
+        @Test
+        @DisplayName("계산 근거가 없는 옛 계획은 회차 비용을 지어내지 않는다")
+        void noCalculationMeta_LeavesCostNull() {
+            var preview = previewWith(step(1, 1000.0, PlanStepStatus.SCHEDULED),
+                    step(2, 1000.0, PlanStepStatus.SCHEDULED));
+
+            assertThat(preview.perRoundCostKrw()).isNull();
+            assertThat(preview.exceedsBudget()).isFalse();
+            assertThat(preview.adjustmentOptions()).isEmpty();
+        }
+
+        /**
+         * 계산 근거가 하나라도 비면 비용을 내지 않는다 — 빠진 값을 0 이나 기본값으로 채우면
+         * 스프레드·수수료가 없는 것처럼 계산돼 실제보다 싼 금액이 나간다.
+         */
+        @org.junit.jupiter.params.ParameterizedTest(name = "{0} 가 비면 비용을 내지 않는다")
+        @org.junit.jupiter.params.provider.MethodSource(
+                "com.divurve.domain.plan.PlanStepExecutionServiceTest#incompleteMeta")
+        void partialCalculationMeta_LeavesCostNull(String missing, PlanCalculationMeta meta) {
+            Plan partial = Plan.builder(goal, 1)
+                    .status(PlanStatus.ACTIVE)
+                    .calculationMeta(meta)
+                    .build();
+            when(planRepository.findById(PLAN_ID)).thenReturn(Optional.of(partial));
+
+            assertThat(previewWith(step(1, 1000.0, PlanStepStatus.SCHEDULED),
+                    step(2, 1000.0, PlanStepStatus.SCHEDULED)).perRoundCostKrw()).isNull();
+        }
+
+        @Test
+        @DisplayName("계획의 환율로 회차 비용을 낸다 — 지금 환율을 다시 조회하지 않는다")
+        void usesPlanRate() {
+            planWithMeta();
+            goal.setBudgetAmount(0L);
+
+            var preview = previewWith(step(1, 1000.0, PlanStepStatus.SCHEDULED),
+                    step(2, 1000.0, PlanStepStatus.SCHEDULED));
+
+            // 4000 을 남은 1회차가 떠안는다 → 4000 × 1350 × 1.01 + 10,000
+            assertThat(preview.perRoundCostKrw()).isEqualTo(5_464_000L);
+            // 예산을 입력하지 않았으면 초과 판정을 하지 않는다.
+            assertThat(preview.exceedsBudget()).isFalse();
+            assertThat(preview.adjustmentOptions()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("재분배된 회차가 예산을 넘으면 조정 선택지를 낸다 — 명세 §15")
+        void overBudget_OffersOptions() {
+            planWithMeta();
+            goal.setBudgetAmount(1_000_000L);
+
+            var preview = previewWith(step(1, 1000.0, PlanStepStatus.SCHEDULED),
+                    step(2, 1000.0, PlanStepStatus.SCHEDULED));
+
+            assertThat(preview.exceedsBudget()).isTrue();
+            assertThat(preview.adjustmentOptions()).containsExactly(
+                    "CHANGE_ROUND_BUDGET", "CHANGE_TARGET_DATE", "CHANGE_TARGET_AMOUNT", "PAUSE_PLAN");
+        }
+
+        @Test
+        @DisplayName("예산 안에 들면 선택지를 내지 않는다")
+        void withinBudget_NoOptions() {
+            planWithMeta();
+            goal.setBudgetAmount(9_000_000L);
+
+            var preview = previewWith(step(1, 1000.0, PlanStepStatus.SCHEDULED),
+                    step(2, 1000.0, PlanStepStatus.SCHEDULED));
+
+            assertThat(preview.exceedsBudget()).isFalse();
+            assertThat(preview.adjustmentOptions()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("날짜 우선이면 목표 날짜 변경이 뒤로 간다 — 명세 §17")
+        void datePriority_DemotesDateChange() {
+            planWithMeta();
+            goal.setBudgetAmount(1_000_000L);
+            goal.setPriorityConstraint(PriorityConstraint.DATE);
+
+            assertThat(previewWith(step(1, 1000.0, PlanStepStatus.SCHEDULED),
+                    step(2, 1000.0, PlanStepStatus.SCHEDULED)).adjustmentOptions())
+                    .containsExactly("CHANGE_ROUND_BUDGET", "CHANGE_TARGET_AMOUNT",
+                            "CHANGE_TARGET_DATE", "PAUSE_PLAN");
+        }
+
+        @Test
+        @DisplayName("예산 우선이면 회차 예산 변경이 뒤로 간다 — 명세 §17")
+        void budgetPriority_DemotesBudgetChange() {
+            planWithMeta();
+            goal.setBudgetAmount(1_000_000L);
+            goal.setPriorityConstraint(PriorityConstraint.BUDGET);
+
+            assertThat(previewWith(step(1, 1000.0, PlanStepStatus.SCHEDULED),
+                    step(2, 1000.0, PlanStepStatus.SCHEDULED)).adjustmentOptions())
+                    .containsExactly("CHANGE_TARGET_AMOUNT", "CHANGE_TARGET_DATE",
+                            "CHANGE_ROUND_BUDGET", "PAUSE_PLAN");
+        }
+
+        @Test
+        @DisplayName("선택지 목록 없이는 미리보기를 만들 수 없다")
+        void nullOptions_Throw() {
+            assertThatThrownBy(() -> new PlanStepExecutionService.SkipPreview(
+                    1, 1.0, 1.0, 1.0, 1, false, null, false, null))
+                    .isInstanceOf(NullPointerException.class);
+        }
+    }
+
+    /** 계산 메타데이터에서 값 하나씩을 뺀 조합 — 어느 하나만 비어도 비용을 낼 수 없다. */
+    static java.util.stream.Stream<org.junit.jupiter.params.provider.Arguments> incompleteMeta() {
+        return java.util.stream.Stream.of(
+                org.junit.jupiter.params.provider.Arguments.of("base_rate",
+                        PlanCalculationMeta.builder("v1").spreadRatio(0.01).feeKrw(10_000L).build()),
+                org.junit.jupiter.params.provider.Arguments.of("spread_ratio",
+                        PlanCalculationMeta.builder("v1").rates(null, 1350.0, null)
+                                .feeKrw(10_000L).build()),
+                org.junit.jupiter.params.provider.Arguments.of("fee_krw",
+                        PlanCalculationMeta.builder("v1").rates(null, 1350.0, null)
+                                .spreadRatio(0.01).build()));
+    }
+
     @Test
     @DisplayName("의존이 null 이면 생성을 거부한다")
     void nullDependencies_Throw() {
         SkipRedistributor redistributor = new SkipRedistributor(new EqualSplitAllocator());
+        ExchangeCostCalculator costs = new ExchangeCostCalculator();
+        AdjustmentOptionSelector options = new AdjustmentOptionSelector();
         assertThatThrownBy(() -> new PlanStepExecutionService(
-                null, planStepRepository, redistributor, CLOCK))
+                null, planStepRepository, redistributor, costs, options, CLOCK))
                 .isInstanceOf(NullPointerException.class);
         assertThatThrownBy(() -> new PlanStepExecutionService(
-                planRepository, null, redistributor, CLOCK))
+                planRepository, null, redistributor, costs, options, CLOCK))
                 .isInstanceOf(NullPointerException.class);
         assertThatThrownBy(() -> new PlanStepExecutionService(
-                planRepository, planStepRepository, null, CLOCK))
+                planRepository, planStepRepository, null, costs, options, CLOCK))
                 .isInstanceOf(NullPointerException.class);
         assertThatThrownBy(() -> new PlanStepExecutionService(
-                planRepository, planStepRepository, redistributor, null))
+                planRepository, planStepRepository, redistributor, null, options, CLOCK))
+                .isInstanceOf(NullPointerException.class);
+        assertThatThrownBy(() -> new PlanStepExecutionService(
+                planRepository, planStepRepository, redistributor, costs, null, CLOCK))
+                .isInstanceOf(NullPointerException.class);
+        assertThatThrownBy(() -> new PlanStepExecutionService(
+                planRepository, planStepRepository, redistributor, costs, options, null))
                 .isInstanceOf(NullPointerException.class);
     }
 }

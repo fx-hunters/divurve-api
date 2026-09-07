@@ -21,9 +21,11 @@ import com.divurve.domain.goal.GoalType;
 import com.divurve.domain.goal.entity.Goal;
 import com.divurve.domain.plan.PlanAccessService;
 import com.divurve.domain.plan.PlanAllocationGuard;
+import com.divurve.domain.plan.PlanApplyService;
 import com.divurve.domain.plan.PlanCalculationService;
 import com.divurve.domain.plan.PlanConfirmService;
 import com.divurve.domain.plan.PlanRepository;
+import com.divurve.domain.plan.PlanScenarioService;
 import com.divurve.domain.plan.PlanStatus;
 import com.divurve.domain.plan.PlanStepExecutionService;
 import com.divurve.domain.plan.PlanRateContextProvider;
@@ -33,6 +35,7 @@ import com.divurve.domain.user.UserRepository;
 import com.divurve.domain.user.entity.User;
 import com.divurve.engine.planner.BudgetFeasibilityEvaluator;
 import com.divurve.engine.planner.BusinessDayCalendar;
+import com.divurve.engine.planner.AdjustmentOptionSelector;
 import com.divurve.engine.planner.EqualSplitAllocator;
 import com.divurve.engine.planner.ExchangeCostCalculator;
 import com.divurve.engine.planner.RecurringAcquisitionCalculator;
@@ -116,16 +119,25 @@ class PlannerEndToEndIntegrationTest extends RepositoryTestBase {
         GoalService goalService = mock(GoalService.class);
         when(goalService.getHeldAmountByCurrency(any(), anyString())).thenReturn(100_000.0);
 
+        PlanConfirmService confirmService =
+                new PlanConfirmService(goalRepository, planRepository, planStepRepository);
+        AdjustmentOptionSelector adjustmentOptionSelector = new AdjustmentOptionSelector();
+
         controller = new PlanController(
                 new PlanAccessService(goalRepository, planRepository),
                 planRepository,
                 planStepRepository,
                 calculationService,
-                new PlanConfirmService(goalRepository, planRepository, planStepRepository),
+                confirmService,
                 new PlanStepExecutionService(
                         planRepository, planStepRepository,
-                        new SkipRedistributor(equalSplitAllocator), CLOCK),
-                new PlanAllocationGuard(goalRepository, goalService));
+                        new SkipRedistributor(equalSplitAllocator), exchangeCostCalculator,
+                        adjustmentOptionSelector, CLOCK),
+                new PlanAllocationGuard(goalRepository, goalService),
+                new PlanScenarioService(
+                        planRepository, planStepRepository, calculationService,
+                        confirmService, adjustmentOptionSelector),
+                new PlanApplyService(planRepository, planStepRepository, confirmService));
 
         User owner = userRepository.save(
                 User.createDemo("planner-" + UUID.randomUUID() + "@divurve.com", "사용자"));

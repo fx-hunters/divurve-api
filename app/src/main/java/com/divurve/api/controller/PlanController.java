@@ -7,6 +7,8 @@ import com.divurve.api.dto.plan.PlanRequest;
 import com.divurve.api.dto.plan.PlanResponse;
 import com.divurve.api.dto.plan.PlanResponseMapper;
 import com.divurve.api.dto.plan.PlanVersionListResponse;
+import com.divurve.api.dto.plan.ScenarioPreviewRequest;
+import com.divurve.api.dto.plan.ScenarioPreviewResponse;
 import com.divurve.api.dto.plan.StepCompleteRequest;
 import com.divurve.api.dto.plan.StepCompleteResponse;
 import com.divurve.api.dto.plan.StepSkipResponse;
@@ -16,11 +18,13 @@ import com.divurve.common.response.ApiResponse;
 import com.divurve.domain.goal.entity.Goal;
 import com.divurve.domain.plan.PlanAccessService;
 import com.divurve.domain.plan.PlanAllocationGuard;
+import com.divurve.domain.plan.PlanApplyService;
 import com.divurve.domain.plan.PlanCalculationService;
 import com.divurve.domain.plan.PlanConfirmService;
 import com.divurve.domain.plan.PlanDraft;
 import com.divurve.domain.plan.PlanInput;
 import com.divurve.domain.plan.PlanRepository;
+import com.divurve.domain.plan.PlanScenarioService;
 import com.divurve.domain.plan.PlanStatus;
 import com.divurve.domain.plan.PlanStepExecutionService;
 import com.divurve.domain.plan.PlanStepRepository;
@@ -62,6 +66,8 @@ public class PlanController {
     private final PlanConfirmService planConfirmService;
     private final PlanStepExecutionService planStepExecutionService;
     private final PlanAllocationGuard planAllocationGuard;
+    private final PlanScenarioService planScenarioService;
+    private final PlanApplyService planApplyService;
 
     public PlanController(
             PlanAccessService planAccessService,
@@ -70,7 +76,9 @@ public class PlanController {
             PlanCalculationService planCalculationService,
             PlanConfirmService planConfirmService,
             PlanStepExecutionService planStepExecutionService,
-            PlanAllocationGuard planAllocationGuard) {
+            PlanAllocationGuard planAllocationGuard,
+            PlanScenarioService planScenarioService,
+            PlanApplyService planApplyService) {
         this.planAccessService = requireNonNull(planAccessService, "planAccessService");
         this.planRepository = requireNonNull(planRepository, "planRepository");
         this.planStepRepository = requireNonNull(planStepRepository, "planStepRepository");
@@ -78,6 +86,8 @@ public class PlanController {
         this.planConfirmService = requireNonNull(planConfirmService, "planConfirmService");
         this.planStepExecutionService = requireNonNull(planStepExecutionService, "planStepExecutionService");
         this.planAllocationGuard = requireNonNull(planAllocationGuard, "planAllocationGuard");
+        this.planScenarioService = requireNonNull(planScenarioService, "planScenarioService");
+        this.planApplyService = requireNonNull(planApplyService, "planApplyService");
     }
 
     @Operation(
@@ -204,6 +214,39 @@ public class PlanController {
 
         return ApiResponse.of(StepSkipResponse.from(
                 planStepExecutionService.previewSkip(planId, seq, plan.getGoal())));
+    }
+
+    @Operation(
+            summary = "상황 변화 미리보기",
+            description = "환율·예산·목표·보유 변화로 계획을 다시 계산해 현재 계획과의 차이를 반환한다."
+                    + " 활성 계획은 바뀌지 않는다 — 결과는 draft 로 저장되고, 적용은 draft_plan_id 로"
+                    + " apply 를 호출해야 일어난다(명세 §16·§17·§21-9).")
+    @PostMapping("/plans/{id}/scenarios/preview")
+    public ApiResponse<ScenarioPreviewResponse> previewScenario(
+            @CurrentUser UUID userId,
+            @PathVariable String id,
+            @Valid @RequestBody ScenarioPreviewRequest request) {
+        UUID planId = UUID.fromString(id);
+        planAccessService.requirePlanOwner(userId, planId);
+
+        return ApiResponse.of(ScenarioPreviewResponse.from(
+                planScenarioService.preview(userId, planId, request.toInput())));
+    }
+
+    @Operation(
+            summary = "변경 계획 적용",
+            description = "미리보기가 만든 draft 계획을 활성으로 승격한다. 버전이 오르고 이전 활성 계획은"
+                    + " superseded 로 내려가며, 완료된 과거 회차는 새 버전에 보존된다"
+                    + "(명세 §18·§21-10·§21-11). 다른 변경안이 먼저 적용됐으면 409.")
+    @PostMapping("/plans/{id}/apply")
+    public ApiResponse<PlanResponse> applyPlan(
+            @CurrentUser UUID userId,
+            @PathVariable String id) {
+        UUID draftPlanId = UUID.fromString(id);
+        planAccessService.requirePlanOwner(userId, draftPlanId);
+
+        Plan applied = planApplyService.apply(draftPlanId);
+        return ApiResponse.of(toStoredResponse(applied, applied.getGoal()));
     }
 
     // ── 내부 ──────────────────────────────────────────────────────────────

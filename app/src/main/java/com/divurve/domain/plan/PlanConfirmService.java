@@ -69,8 +69,38 @@ public class PlanConfirmService {
         return saved;
     }
 
-    private int nextVersion(UUID goalId) {
-        return planRepository.findTopByGoal_IdOrderByVersionDesc(goalId)
+    /**
+     * 계산된 계획을 <b>적용하지 않고</b> draft 로만 저장한다 (명세 §16·§18).
+     *
+     * <p>시나리오 미리보기가 쓴다. 활성 계획을 건드리지 않으므로 {@code superseded} 전이도,
+     * 활성 승격도 하지 않는다 (§21-9). 사용자가 승인하면 {@link PlanApplyService} 가 이 계획을
+     * 승격시킨다 — 그때 다시 계산하지 않기 위해 미리 저장해 둔다.
+     *
+     * @param goalId       목표 ID
+     * @param draft        계산된 계획
+     * @param changeReason 변경 이유 코드 (명세 §16)
+     * @return 저장된 draft 계획
+     * @throws NotFoundException 목표를 찾을 수 없는 경우
+     */
+    @Transactional
+    public Plan saveDraft(UUID goalId, PlanDraft draft, String changeReason) {
+        requireNonNull(draft, "draft");
+        Goal goal = goalRepository.findById(goalId)
+                .orElseThrow(() -> new NotFoundException("목표를 찾을 수 없습니다: " + goalId));
+
+        Plan saved = planRepository.save(newPlan(goal, draft, changeReason, nextVersion(goalId)));
+        saveSteps(saved, draft.steps());
+        return saved;
+    }
+
+    /**
+     * 다음 계획 버전 번호 (명세 §21-10).
+     *
+     * <p>draft 는 세지 않는다. 미리보기를 세 번 눌렀다고 버전이 3 뛰면 사용자가 보는 이력에
+     * 존재하지 않는 버전 구멍이 생긴다 — 버전은 <b>적용된</b> 계획의 순번이다.
+     */
+    int nextVersion(UUID goalId) {
+        return planRepository.findTopByGoal_IdAndStatusNotOrderByVersionDesc(goalId, PlanStatus.DRAFT)
                 .map(plan -> plan.getVersion() + 1)
                 .orElse(1);
     }

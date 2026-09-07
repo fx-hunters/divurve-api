@@ -16,6 +16,8 @@ import static org.mockito.Mockito.when;
 import com.divurve.api.dto.plan.PlanRequest;
 import com.divurve.api.dto.plan.PlanResponse;
 import com.divurve.api.dto.plan.PlanVersionListResponse;
+import com.divurve.api.dto.plan.ScenarioPreviewRequest;
+import com.divurve.api.dto.plan.ScenarioPreviewResponse;
 import com.divurve.api.dto.plan.StepCompleteRequest;
 import com.divurve.api.dto.plan.StepCompleteResponse;
 import com.divurve.api.dto.plan.StepSkipResponse;
@@ -25,11 +27,14 @@ import com.divurve.domain.goal.GoalType;
 import com.divurve.domain.goal.entity.Goal;
 import com.divurve.domain.plan.PlanAccessService;
 import com.divurve.domain.plan.PlanAllocationGuard;
+import com.divurve.domain.plan.PlanApplyService;
 import com.divurve.domain.plan.PlanCalculationService;
 import com.divurve.domain.plan.PlanConfirmService;
 import com.divurve.domain.plan.PlanDraft;
 import com.divurve.domain.plan.PlanRateContext;
 import com.divurve.domain.plan.PlanRepository;
+import com.divurve.domain.plan.PlanScenarioService;
+import com.divurve.domain.plan.ScenarioPreview;
 import com.divurve.domain.plan.PlanStatus;
 import com.divurve.domain.plan.PlanStepExecutionService;
 import com.divurve.domain.plan.PlanStepRepository;
@@ -70,6 +75,8 @@ class PlanControllerTest {
     private PlanConfirmService planConfirmService;
     private PlanStepExecutionService planStepExecutionService;
     private PlanAllocationGuard planAllocationGuard;
+    private PlanScenarioService planScenarioService;
+    private PlanApplyService planApplyService;
     private PlanController controller;
     private Goal goal;
 
@@ -82,10 +89,12 @@ class PlanControllerTest {
         planConfirmService = mock(PlanConfirmService.class);
         planStepExecutionService = mock(PlanStepExecutionService.class);
         planAllocationGuard = mock(PlanAllocationGuard.class);
+        planScenarioService = mock(PlanScenarioService.class);
+        planApplyService = mock(PlanApplyService.class);
         controller = new PlanController(
                 planAccessService, planRepository, planStepRepository,
                 planCalculationService, planConfirmService, planStepExecutionService,
-                planAllocationGuard);
+                planAllocationGuard, planScenarioService, planApplyService);
 
         goal = Goal.builder(User.createDemo("a@b.com", "사용자"), "여행 자금", "onetime", "travel", "USD")
                 .targetAmount(4000.0)
@@ -383,7 +392,7 @@ class PlanControllerTest {
         when(planAccessService.requirePlanOwner(USER_ID, PLAN_ID)).thenReturn(plan);
         when(planStepExecutionService.previewSkip(any(), anyInt(), any()))
                 .thenReturn(new PlanStepExecutionService.SkipPreview(
-                        2, 1000.0, 1500.0, 3000.0, 2, false));
+                        2, 1000.0, 1500.0, 3000.0, 2, false, 2_100_000L, false, List.of()));
 
         StepSkipResponse data = controller.skipStep(USER_ID, PLAN_ID.toString(), 2).data();
 
@@ -401,7 +410,9 @@ class PlanControllerTest {
         when(planAccessService.requirePlanOwner(USER_ID, PLAN_ID)).thenReturn(plan);
         when(planStepExecutionService.previewSkip(any(), anyInt(), any()))
                 .thenReturn(new PlanStepExecutionService.SkipPreview(
-                        2, 1000.0, 0.0, 3000.0, 0, true));
+                        2, 1000.0, 0.0, 3000.0, 0, true, null, false,
+                        List.of("CHANGE_ROUND_BUDGET", "CHANGE_TARGET_AMOUNT",
+                                "CHANGE_TARGET_DATE", "PAUSE_PLAN")));
 
         StepSkipResponse data = controller.skipStep(USER_ID, PLAN_ID.toString(), 2).data();
 
@@ -438,35 +449,108 @@ class PlanControllerTest {
     }
 
     @Test
+    @DisplayName("시나리오 미리보기는 소유자 검증 후 도메인 결과를 그대로 옮긴다 — 명세 §16")
+    void previewScenario_MapsDomainResult() {
+        when(planAccessService.requirePlanOwner(USER_ID, PLAN_ID)).thenReturn(storedPlan());
+        UUID draftId = UUID.randomUUID();
+        when(planScenarioService.preview(eq(USER_ID), eq(PLAN_ID), any())).thenReturn(
+                new ScenarioPreview(
+                        PLAN_ID, 2, draftId, 3, "TARGET_DATE_CHANGED", "amount",
+                        new ScenarioPreview.Side(
+                                new java.math.BigDecimal("3000"), LocalDate.of(2026, 12, 24), 3, 3,
+                                new java.math.BigDecimal("1000"), null,
+                                new PlanDraft.CostRange(1L, 2L, 3L)),
+                        new ScenarioPreview.Side(
+                                new java.math.BigDecimal("3000"), LocalDate.of(2027, 3, 1), 5, 5,
+                                new java.math.BigDecimal("600"), null, null),
+                        List.of(new ScenarioPreview.StepChange(
+                                2, ScenarioPreview.MODIFIED, LocalDate.of(2026, 9, 14),
+                                LocalDate.of(2026, 9, 21),
+                                new java.math.BigDecimal("1000"), new java.math.BigDecimal("600"))),
+                        List.of("amount"), List.of("date"),
+                        "COVERED_IN_RANGE", List.of(), List.of("FORECAST_UNAVAILABLE")));
+
+        ScenarioPreviewResponse data = controller.previewScenario(
+                USER_ID, PLAN_ID.toString(),
+                new ScenarioPreviewRequest("TARGET_DATE_CHANGED", null, null,
+                        LocalDate.of(2027, 3, 1), null, null)).data();
+
+        assertThat(data.basePlanId()).isEqualTo(PLAN_ID.toString());
+        assertThat(data.draftPlanId()).isEqualTo(draftId.toString());
+        assertThat(data.draftVersion()).isEqualTo(3);
+        assertThat(data.changeReasonCode()).isEqualTo("TARGET_DATE_CHANGED");
+        assertThat(data.keptConstraints()).containsExactly("amount");
+        assertThat(data.brokenConstraints()).containsExactly("date");
+        assertThat(data.changedSteps()).singleElement()
+                .extracting(ScenarioPreviewResponse.StepChangeResponse::changeType)
+                .isEqualTo(ScenarioPreview.MODIFIED);
+        assertThat(data.before().costRange().baseKrw()).isEqualTo(2L);
+        // 비용 요약이 없는 쪽은 범위를 지어내지 않는다.
+        assertThat(data.after().costRange()).isNull();
+        assertThat(data.warnings()).containsExactly("FORECAST_UNAVAILABLE");
+        verify(planAccessService).requirePlanOwner(USER_ID, PLAN_ID);
+    }
+
+    @Test
+    @DisplayName("적용은 소유자 검증 후 승격된 계획을 반환한다 — 명세 §18")
+    void applyPlan_ReturnsPromotedPlan() {
+        Plan applied = storedPlan();
+        when(planAccessService.requirePlanOwner(USER_ID, PLAN_ID)).thenReturn(applied);
+        when(planApplyService.apply(PLAN_ID)).thenReturn(applied);
+        when(planStepRepository.findByPlan_IdOrderBySeqAsc(applied.getId())).thenReturn(List.of());
+
+        PlanResponse data = controller.applyPlan(USER_ID, PLAN_ID.toString()).data();
+
+        assertThat(data).isNotNull();
+        verify(planAccessService).requirePlanOwner(USER_ID, PLAN_ID);
+        verify(planApplyService).apply(PLAN_ID);
+    }
+
+    @Test
     @DisplayName("의존이 null 이면 생성을 거부한다")
     void nullDependencies_Throw() {
         assertThatThrownBy(() -> new PlanController(
                 null, planRepository, planStepRepository, planCalculationService,
-                planConfirmService, planStepExecutionService, planAllocationGuard))
+                planConfirmService, planStepExecutionService, planAllocationGuard,
+                planScenarioService, planApplyService))
                 .isInstanceOf(NullPointerException.class);
         assertThatThrownBy(() -> new PlanController(
                 planAccessService, null, planStepRepository, planCalculationService,
-                planConfirmService, planStepExecutionService, planAllocationGuard))
+                planConfirmService, planStepExecutionService, planAllocationGuard,
+                planScenarioService, planApplyService))
                 .isInstanceOf(NullPointerException.class);
         assertThatThrownBy(() -> new PlanController(
                 planAccessService, planRepository, null, planCalculationService,
-                planConfirmService, planStepExecutionService, planAllocationGuard))
+                planConfirmService, planStepExecutionService, planAllocationGuard,
+                planScenarioService, planApplyService))
                 .isInstanceOf(NullPointerException.class);
         assertThatThrownBy(() -> new PlanController(
                 planAccessService, planRepository, planStepRepository, null,
-                planConfirmService, planStepExecutionService, planAllocationGuard))
+                planConfirmService, planStepExecutionService, planAllocationGuard,
+                planScenarioService, planApplyService))
                 .isInstanceOf(NullPointerException.class);
         assertThatThrownBy(() -> new PlanController(
                 planAccessService, planRepository, planStepRepository, planCalculationService,
-                null, planStepExecutionService, planAllocationGuard))
+                null, planStepExecutionService, planAllocationGuard,
+                planScenarioService, planApplyService))
                 .isInstanceOf(NullPointerException.class);
         assertThatThrownBy(() -> new PlanController(
                 planAccessService, planRepository, planStepRepository, planCalculationService,
-                planConfirmService, null, planAllocationGuard))
+                planConfirmService, null, planAllocationGuard,
+                planScenarioService, planApplyService))
                 .isInstanceOf(NullPointerException.class);
         assertThatThrownBy(() -> new PlanController(
                 planAccessService, planRepository, planStepRepository, planCalculationService,
-                planConfirmService, planStepExecutionService, null))
+                planConfirmService, planStepExecutionService, null,
+                planScenarioService, planApplyService))
+                .isInstanceOf(NullPointerException.class);
+        assertThatThrownBy(() -> new PlanController(
+                planAccessService, planRepository, planStepRepository, planCalculationService,
+                planConfirmService, planStepExecutionService, planAllocationGuard, null, planApplyService))
+                .isInstanceOf(NullPointerException.class);
+        assertThatThrownBy(() -> new PlanController(
+                planAccessService, planRepository, planStepRepository, planCalculationService,
+                planConfirmService, planStepExecutionService, planAllocationGuard, planScenarioService, null))
                 .isInstanceOf(NullPointerException.class);
     }
 }

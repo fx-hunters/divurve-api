@@ -35,4 +35,12 @@ public interface PlanRepository extends JpaRepository<Plan, UUID> {
 
     /** 목표의 최신 계획 버전(가장 높은 버전 번호)을 조회한다. */
     Optional<Plan> findTopByGoal_IdOrderByVersionDesc(UUID goalId);
+
+    /**
+     * 특정 상태를 제외한 최신 계획 버전 (명세 §21-10).
+     *
+     * <p>버전 번호를 매길 때 {@code draft} 를 빼는 데 쓴다 — 시나리오 미리보기가 draft 를
+     * 저장하므로, 그것까지 세면 미리보기를 누른 횟수만큼 버전이 건너뛴다.
+     */
+    Optional<Plan> findTopByGoal_IdAndStatusNotOrderByVersionDesc(UUID goalId, String status);
 }
