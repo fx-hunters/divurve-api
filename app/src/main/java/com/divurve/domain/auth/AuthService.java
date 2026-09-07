@@ -10,6 +10,7 @@ import com.divurve.domain.user.UserRepository;
 import com.divurve.domain.user.entity.User;
 import java.util.Objects;
 import java.util.Optional;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -24,6 +25,15 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * <p>로그인·갱신 결과에는 {@code onboarded}(초기 설정 완료 여부)가 함께 실린다 — 클라이언트가 초기 설정으로
  * 보낼지 홈으로 보낼지 이 값 하나로 결정한다(API 명세 v2 §3, FR-IS-01·FR-IS-07).
+ *
+ * <p><b>가입 직후 샘플 자산 시드는 한시적이다</b>(이슈 #108). 원래 온보딩 2단계는 금융기관에서 사용자의
+ * 실제 자산을 불러와야 하지만, MVP 범위에 실연동이 없다(명세 §241 "마이데이터·증권사 연동은 구현하지
+ * 않는다"). 그동안 가입 계정을 빈 상태로 두면 온보딩 2단계부터 홈·X-ray·플랜까지 전부 빈 화면이 되므로
+ * {@link SampleDataSeeder} 로 데모와 같은 샘플을 넣는다. 실연동이 도착하면 이 호출과
+ * {@code app.onboarding.seed-sample-assets-on-signup} 플래그를 함께 걷어낸다.
+ *
+ * <p>시드를 넣어도 {@code onboarded} 는 {@code false} 다 — 자산이 있다는 것과 사용자가 초기 설정을
+ * 끝냈다는 것은 다른 사실이며, 온보딩 화면 자체를 건너뛰면 안 된다(FR-IS-01).
  */
 @UseCase
 public class AuthService {
@@ -44,18 +54,26 @@ public class AuthService {
 
     private final UserRepository userRepository;
     private final TokenProvider tokenProvider;
+    private final SampleDataSeeder sampleDataSeeder;
+    private final boolean seedSampleAssetsOnSignup;
     private final BCryptPasswordEncoder passwordEncoder;
     private final String dummyPasswordHash;
 
-    public AuthService(UserRepository userRepository, TokenProvider tokenProvider) {
+    public AuthService(
+            UserRepository userRepository,
+            TokenProvider tokenProvider,
+            SampleDataSeeder sampleDataSeeder,
+            @Value("${app.onboarding.seed-sample-assets-on-signup:true}") boolean seedSampleAssetsOnSignup) {
         this.userRepository = userRepository;
         this.tokenProvider = tokenProvider;
+        this.sampleDataSeeder = sampleDataSeeder;
+        this.seedSampleAssetsOnSignup = seedSampleAssetsOnSignup;
         this.passwordEncoder = new BCryptPasswordEncoder();
         this.dummyPasswordHash = passwordEncoder.encode(DUMMY_PASSWORD_FOR_TIMING_SAFETY);
     }
 
     /**
-     * 회원가입: 이메일 중복 검사 → 비밀번호 BCrypt 해시 → User 저장 → 토큰 발급.
+     * 회원가입: 이메일 중복 검사 → 비밀번호 BCrypt 해시 → User 저장 → 샘플 자산 시드(한시적) → 토큰 발급.
      *
      * @param email 이메일
      * @param password 평문 비밀번호
@@ -76,6 +94,11 @@ public class AuthService {
         String passwordHash = passwordEncoder.encode(password);
         User user = User.create(email, name, passwordHash);
         User savedUser = userRepository.save(user);
+
+        // 실연동이 도착할 때까지의 임시 조치 — 클래스 javadoc 참고.
+        if (seedSampleAssetsOnSignup) {
+            sampleDataSeeder.seed(savedUser);
+        }
 
         return tokenProvider.issue(savedUser.getId(), false);
     }

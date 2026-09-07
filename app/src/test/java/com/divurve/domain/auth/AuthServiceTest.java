@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.catchThrowableOfType;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.divurve.common.exception.DuplicateResourceException;
@@ -35,12 +36,14 @@ class AuthServiceTest {
     private AuthService authService;
     private UserRepository userRepository;
     private TokenProvider tokenProvider;
+    private SampleDataSeeder sampleDataSeeder;
 
     @BeforeEach
     void setUp() {
         userRepository = mock(UserRepository.class);
         tokenProvider = mock(TokenProvider.class);
-        authService = new AuthService(userRepository, tokenProvider);
+        sampleDataSeeder = mock(SampleDataSeeder.class);
+        authService = new AuthService(userRepository, tokenProvider, sampleDataSeeder, true);
     }
 
     @Test
@@ -66,6 +69,41 @@ class AuthServiceTest {
         verify(userRepository).findByEmail(email);
         verify(userRepository).save(any(User.class));
         verify(tokenProvider).issue(userId, false);
+    }
+
+    @Test
+    void signup_은_실연동이_없는_동안_샘플_자산을_임시로_시드한다() {
+        // 원래 온보딩 2단계는 금융기관에서 실제 자산을 불러와야 한다(이슈 #108). MVP 범위에 실연동이
+        // 없어 빈 계정으로 두면 온보딩 2단계부터 홈·X-ray·플랜까지 전부 빈 화면이 된다.
+        User savedUser = givenSavedUser();
+
+        authService.signup("user@example.com", "password123", "User Name");
+
+        verify(sampleDataSeeder).seed(savedUser);
+    }
+
+    @Test
+    void 플래그를_끄면_가입_계정에_샘플을_넣지_않는다() {
+        // 실연동이 도착하면 플래그를 끄는 것으로 먼저 분리하고, 그 다음 호출을 걷어낸다.
+        AuthService withoutSeed = new AuthService(userRepository, tokenProvider, sampleDataSeeder, false);
+        givenSavedUser();
+
+        withoutSeed.signup("user@example.com", "password123", "User Name");
+
+        verifyNoInteractions(sampleDataSeeder);
+    }
+
+    /** 가입이 성공하는 최소 조건 — 중복 없음 + id 가 채워진 저장 결과 + 토큰 발급. */
+    private User givenSavedUser() {
+        UUID userId = UUID.randomUUID();
+        User savedUser = User.create("user@example.com", "User Name", "hashed");
+        assignId(savedUser, userId);
+
+        when(userRepository.findByEmail("user@example.com")).thenReturn(Optional.empty());
+        when(userRepository.save(any(User.class))).thenReturn(savedUser);
+        when(tokenProvider.issue(userId, false)).thenReturn(new AuthTokens("access", "refresh", 1800));
+
+        return savedUser;
     }
 
     @Test

@@ -42,7 +42,11 @@ public class AuthController {
 
     @Operation(summary = "회원가입",
             description = "이메일·비밀번호·이름으로 계정을 만든다. 이메일은 고유해야 한다. "
-                    + "가입 직후에는 초기 설정을 하지 않았으므로 onboarded=false 다.")
+                    + "가입 직후에는 초기 설정을 하지 않았으므로 onboarded=false 다.\n\n"
+                    + "**MVP 한시 동작(이슈 #108)** — 원래 온보딩 2단계는 금융기관에서 사용자의 실제 자산을 "
+                    + "불러와야 하지만 실연동이 범위 밖이라, 가입 직후 데모 계정과 같은 샘플 자산·목표·"
+                    + "진단 응답이 임시로 채워진다. 온보딩 2단계는 GET /api/v1/xray 로 그 값을 그대로 "
+                    + "표시하면 된다. 실연동이 도착하면 이 동작은 사라진다.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "가입 성공"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(

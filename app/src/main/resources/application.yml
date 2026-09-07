@@ -14,6 +14,14 @@ server:
 # access 30분(1800s)·refresh 14일(1209600s) — NFR-SE-02.
 
 app:
+  # 온보딩 (이슈 #108) — 가입 직후 샘플 자산 시드.
+  # 원래 온보딩 2단계는 금융기관에서 사용자의 실제 자산을 불러와야 하지만, MVP 범위에 실연동이 없다
+  # (API 명세 §241 "마이데이터·증권사 연동은 구현하지 않는다"). 그동안 가입 계정을 빈 상태로 두면
+  # 온보딩 2단계부터 홈·X-ray·플랜까지 전부 빈 화면이 되므로, 데모 계정과 같은 샘플을 임시로 넣는다.
+  # 실연동이 도착하면 이 플래그와 AuthService 의 호출을 함께 걷어낸다.
+  # 데모 계정(POST /auth/demo)의 시드는 이 플래그와 무관하게 항상 들어간다 — 그쪽은 제품 기능이다.
+  onboarding:
+    seed-sample-assets-on-signup: ${SEED_SAMPLE_ASSETS_ON_SIGNUP:true}
   auth:
     jwt-secret: ${JWT_SECRET:local-dev-insecure-jwt-secret-please-override-in-prod-0123456789}
     access-token-ttl-seconds: 1800
