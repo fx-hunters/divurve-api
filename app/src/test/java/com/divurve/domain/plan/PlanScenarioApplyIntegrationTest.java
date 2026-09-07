@@ -9,6 +9,9 @@ import static org.mockito.Mockito.when;
 import com.divurve.common.exception.InvalidRequestException;
 import com.divurve.domain.RepositoryTestBase;
 import com.divurve.domain.goal.GoalRepository;
+import com.divurve.domain.master.CurrencyPairRepository;
+import com.divurve.domain.master.CurrencyRepository;
+import com.divurve.domain.master.MasterDataService;
 import com.divurve.domain.goal.GoalType;
 import com.divurve.domain.goal.PriorityConstraint;
 import com.divurve.domain.goal.entity.Goal;
@@ -66,6 +69,12 @@ class PlanScenarioApplyIntegrationTest extends RepositoryTestBase {
     private UserRepository userRepository;
 
     @Autowired
+    private CurrencyRepository currencyRepository;
+
+    @Autowired
+    private CurrencyPairRepository currencyPairRepository;
+
+    @Autowired
     private EntityManager entityManager;
 
     private PlanCalculationService planCalculationService;
@@ -83,10 +92,15 @@ class PlanScenarioApplyIntegrationTest extends RepositoryTestBase {
                 planRepository, planStepRepository, planCalculationService,
                 confirmService, new AdjustmentOptionSelector());
         applyService = new PlanApplyService(planRepository, planStepRepository, confirmService);
+        // 통화 마스터는 마이그레이션 시드가 채운 실제 표를 읽는다(이슈 #111) — 시드가 어긋나면
+        // 여기서 드러난다.
+        MasterDataService masterDataService =
+                new MasterDataService(currencyRepository, currencyPairRepository);
         executionService = new PlanStepExecutionService(
                 planRepository, planStepRepository,
                 new SkipRedistributor(new EqualSplitAllocator()),
-                new ExchangeCostCalculator(), new AdjustmentOptionSelector(), CLOCK);
+                new ExchangeCostCalculator(), new AdjustmentOptionSelector(),
+                masterDataService, CLOCK);
 
         User owner = userRepository.save(
                 User.createDemo("scenario-" + UUID.randomUUID() + "@divurve.com", "사용자"));

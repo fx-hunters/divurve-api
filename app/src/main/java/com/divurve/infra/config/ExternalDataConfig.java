@@ -39,9 +39,13 @@ public class ExternalDataConfig {
      * <p>{@code fx-history} 는 이슈 #57 에서 추가했다. 가장 무거운 호출인데 캐시가 없었다 —
      * {@code /forecast}·{@code /market/regime} 이 열릴 때마다 통화쌍별로 5년치(약 1,400 관측)를
      * 새로 받아 변동성·백분위를 다시 계산했다.
+     *
+     * <p>{@code currency-master} 는 이슈 #111 에서 추가했다. 통화 마스터가 하드코딩 상수에서 DB 표로
+     * 옮겨오면서, 계획 계산 한 번마다 통화 표시 규칙 조회가 DB 를 치게 됐다. 이 표는 마이그레이션
+     * 시드로만 바뀌므로 TTL 안에서 낡을 일이 사실상 없다.
      */
     static final List<String> EXTERNAL_CACHE_NAMES =
-        List.of("fx-latest", "fx-history", "macro-latest");
+        List.of("fx-latest", "fx-history", "macro-latest", "currency-master");
 
     /** 연결 타임아웃 — 외부가 응답하지 않을 때 요청 스레드를 붙잡아 두지 않는다. */
     static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(3);

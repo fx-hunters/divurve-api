@@ -7,6 +7,7 @@ import com.divurve.common.exception.InvalidRequestException;
 import com.divurve.common.exception.NotFoundException;
 import com.divurve.domain.goal.PriorityConstraint;
 import com.divurve.domain.goal.entity.Goal;
+import com.divurve.domain.master.MasterDataService;
 import com.divurve.domain.plan.entity.Plan;
 import com.divurve.domain.plan.entity.PlanCalculationMeta;
 import com.divurve.domain.plan.entity.PlanStep;
@@ -40,11 +41,15 @@ import org.springframework.transaction.annotation.Transactional;
 @UseCase
 public class PlanStepExecutionService {
 
+    /** 마스터에 없는 통화의 표시 자릿수 기본값. 대부분의 통화가 2 다. */
+    private static final int DEFAULT_MINOR_UNITS = 2;
+
     private final PlanRepository planRepository;
     private final PlanStepRepository planStepRepository;
     private final SkipRedistributor skipRedistributor;
     private final ExchangeCostCalculator exchangeCostCalculator;
     private final AdjustmentOptionSelector adjustmentOptionSelector;
+    private final MasterDataService masterDataService;
     private final Clock clock;
 
     public PlanStepExecutionService(
@@ -53,6 +58,7 @@ public class PlanStepExecutionService {
             SkipRedistributor skipRedistributor,
             ExchangeCostCalculator exchangeCostCalculator,
             AdjustmentOptionSelector adjustmentOptionSelector,
+            MasterDataService masterDataService,
             Clock clock) {
         this.planRepository = requireNonNull(planRepository, "planRepository");
         this.planStepRepository = requireNonNull(planStepRepository, "planStepRepository");
@@ -60,6 +66,7 @@ public class PlanStepExecutionService {
         this.exchangeCostCalculator = requireNonNull(exchangeCostCalculator, "exchangeCostCalculator");
         this.adjustmentOptionSelector =
                 requireNonNull(adjustmentOptionSelector, "adjustmentOptionSelector");
+        this.masterDataService = requireNonNull(masterDataService, "masterDataService");
         this.clock = requireNonNull(clock, "clock");
     }
 
@@ -275,13 +282,16 @@ public class PlanStepExecutionService {
                 alreadyApplied);
     }
 
-    /** JPY 는 소수 자릿수가 0 이다. 통화 표시 규칙은 CurrencyMaster 가 갖는다. */
+    /**
+     * JPY 는 소수 자릿수가 0 이다. 통화 표시 규칙은 {@code currencies} 마스터가 갖는다.
+     *
+     * <p>마스터에 없는 통화면 2 로 둔다 — 이 값은 표시 반올림에만 쓰이므로, 알 수 없다고 해서
+     * 회차 완료 기록 자체를 실패시킬 이유가 없다.
+     */
     private int minorUnitsOf(Goal goal) {
-        return com.divurve.domain.master.CurrencyMaster.all().stream()
-                .filter(currency -> currency.currencyCode().equals(goal.getCurrencyCode()))
-                .mapToInt(com.divurve.domain.master.CurrencyMaster.Currency::minorUnits)
-                .findFirst()
-                .orElse(2);
+        return masterDataService.findCurrency(goal.getCurrencyCode())
+                .map(currency -> (int) currency.minorUnits())
+                .orElse(DEFAULT_MINOR_UNITS);
     }
 
     /**

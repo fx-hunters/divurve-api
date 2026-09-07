@@ -8,6 +8,8 @@ import com.divurve.domain.port.AuthPrincipal;
 import com.divurve.domain.port.TokenProvider;
 import com.divurve.domain.user.UserRepository;
 import com.divurve.domain.user.entity.User;
+import java.time.Clock;
+import java.time.Instant;
 import java.util.Objects;
 import java.util.Optional;
 import org.springframework.beans.factory.annotation.Value;
@@ -22,6 +24,10 @@ import org.springframework.transaction.annotation.Transactional;
  * 이메일·비밀번호로 인증한다.
  *
  * <p>refresh 메서드는 기존 리프레시 토큰 검증 후 새 액세스 토큰만 발급한다.
+ *
+ * <p>가입·로그인·갱신이 성공하면 {@code users.last_login_at}/{@code last_login_ip} 를 남긴다
+ * (이슈 #111). 실패한 시도는 남기지 않는다 — 마지막 값 하나로는 실패를 표현할 수 없고,
+ * 그러려면 별도 이력 테이블이 필요하다. 그래서 login/refresh 는 더 이상 readOnly 트랜잭션이 아니다.
  *
  * <p>로그인·갱신 결과에는 {@code onboarded}(초기 설정 완료 여부)가 함께 실린다 — 클라이언트가 초기 설정으로
  * 보낼지 홈으로 보낼지 이 값 하나로 결정한다(API 명세 v2 §3, FR-IS-01·FR-IS-07).
@@ -56,6 +62,7 @@ public class AuthService {
     private final TokenProvider tokenProvider;
     private final SampleDataSeeder sampleDataSeeder;
     private final boolean seedSampleAssetsOnSignup;
+    private final Clock clock;
     private final BCryptPasswordEncoder passwordEncoder;
     private final String dummyPasswordHash;
 
@@ -63,11 +70,13 @@ public class AuthService {
             UserRepository userRepository,
             TokenProvider tokenProvider,
             SampleDataSeeder sampleDataSeeder,
-            @Value("${app.onboarding.seed-sample-assets-on-signup:true}") boolean seedSampleAssetsOnSignup) {
-        this.userRepository = userRepository;
-        this.tokenProvider = tokenProvider;
-        this.sampleDataSeeder = sampleDataSeeder;
+            @Value("${app.onboarding.seed-sample-assets-on-signup:true}") boolean seedSampleAssetsOnSignup,
+            Clock clock) {
+        this.userRepository = Objects.requireNonNull(userRepository, "userRepository");
+        this.tokenProvider = Objects.requireNonNull(tokenProvider, "tokenProvider");
+        this.sampleDataSeeder = Objects.requireNonNull(sampleDataSeeder, "sampleDataSeeder");
         this.seedSampleAssetsOnSignup = seedSampleAssetsOnSignup;
+        this.clock = Objects.requireNonNull(clock, "clock");
         this.passwordEncoder = new BCryptPasswordEncoder();
         this.dummyPasswordHash = passwordEncoder.encode(DUMMY_PASSWORD_FOR_TIMING_SAFETY);
     }
@@ -78,11 +87,12 @@ public class AuthService {
      * @param email 이메일
      * @param password 평문 비밀번호
      * @param name 사용자 이름
+     * @param clientIp 접속 IP. 알 수 없으면 {@code null}
      * @return 발급된 액세스·리프레시 토큰
      * @throws DuplicateResourceException 이메일이 이미 가입돼 있을 때 (409)
      */
     @Transactional
-    public AuthTokens signup(String email, String password, String name) {
+    public AuthTokens signup(String email, String password, String name, String clientIp) {
         Objects.requireNonNull(email, "email must not be null");
         Objects.requireNonNull(password, "password must not be null");
         Objects.requireNonNull(name, "name must not be null");
@@ -93,6 +103,8 @@ public class AuthService {
 
         String passwordHash = passwordEncoder.encode(password);
         User user = User.create(email, name, passwordHash);
+        // 가입 직후 곧바로 토큰을 발급하므로 이 시점이 첫 접속이다 (이슈 #111).
+        user.recordLogin(Instant.now(clock), clientIp);
         User savedUser = userRepository.save(user);
 
         // 실연동이 도착할 때까지의 임시 조치 — 클래스 javadoc 참고.
@@ -108,13 +120,14 @@ public class AuthService {
      *
      * @param email 이메일
      * @param password 평문 비밀번호
+     * @param clientIp 접속 IP. 알 수 없으면 {@code null}
      * @return 발급된 토큰과 초기 설정 완료 여부
      * @throws UnauthorizedException 이메일이 없거나 비밀번호가 틀렸을 때 (401). 사용자 열거를 막기 위해
      *                                두 경우를 구분하지 않고 같은 메시지로 던진다(이슈 #61) — 이메일이
      *                                없어도 더미 해시로 bcrypt 비교를 수행해 응답 시간도 동일하게 만든다.
      */
-    @Transactional(readOnly = true)
-    public AuthResult login(String email, String password) {
+    @Transactional
+    public AuthResult login(String email, String password, String clientIp) {
         Objects.requireNonNull(email, "email must not be null");
         Objects.requireNonNull(password, "password must not be null");
 
@@ -127,7 +140,10 @@ public class AuthService {
         }
 
         User authenticatedUser = user.get();
-        return new AuthResult(tokenProvider.issue(authenticatedUser.getId(), false), authenticatedUser.isOnboarded());
+        authenticatedUser.recordLogin(Instant.now(clock), clientIp);
+        return new AuthResult(
+                tokenProvider.issue(authenticatedUser.getId(), false),
+                authenticatedUser.isOnboarded());
     }
 
     /**
@@ -135,11 +151,12 @@ public class AuthService {
      * 리프레시 토큰은 재사용되며, 새 리프레시 토큰은 발급하지 않는다.
      *
      * @param refreshToken 리프레시 토큰
+     * @param clientIp 접속 IP. 알 수 없으면 {@code null}
      * @return 새 액세스 토큰과 초기 설정 완료 여부 (refreshToken 필드는 입력 값과 동일)
      * @throws UnauthorizedException 리프레시 토큰이 위조됐거나 만료됐을 때 (401)
      */
-    @Transactional(readOnly = true)
-    public AuthResult refreshAccessToken(String refreshToken) {
+    @Transactional
+    public AuthResult refreshAccessToken(String refreshToken, String clientIp) {
         Objects.requireNonNull(refreshToken, "refreshToken must not be null");
 
         AuthPrincipal authPrincipal = tokenProvider.verifyRefreshToken(refreshToken)
@@ -147,7 +164,12 @@ public class AuthService {
         AuthTokens newTokens = tokenProvider.issue(authPrincipal.userId(), authPrincipal.isDemo());
 
         boolean onboarded = userRepository.findById(authPrincipal.userId())
-                .map(User::isOnboarded)
+                .map(user -> {
+                    // 갱신도 접속이다 — 앱을 계속 쓰는 사용자는 로그인을 다시 하지 않으므로,
+                    // 갱신을 세지 않으면 "마지막 접속" 이 최초 로그인 시각에 멈춘다.
+                    user.recordLogin(Instant.now(clock), clientIp);
+                    return user.isOnboarded();
+                })
                 .orElse(false);
 
         // 기존 리프레시 토큰 유지 (클라이언트는 리프레시 토큰 교체 필요 없음)

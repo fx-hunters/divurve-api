@@ -23,6 +23,7 @@ import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
+import com.divurve.domain.user.AdminAccessService;
 
 /**
  * 이슈 #75(②) — {@code PUT /me} 에 {@code name} 없이 (또는 빈 문자열로) 요청하면 이전에는
@@ -37,6 +38,13 @@ class MeRequestValidationMockMvcTest {
 
     @Autowired
     private MockMvc mockMvc;
+
+    /**
+     * {@code WebAuthConfig} 가 관리자 리졸버를 배선하면서 이 빈을 요구한다 (이슈 #111).
+     * 이 테스트는 관리자 경로를 다루지 않지만, 없으면 컨텍스트 자체가 뜨지 않는다.
+     */
+    @MockBean
+    private AdminAccessService adminAccessService;
 
     @MockBean
     private UserProfileService userProfileService;

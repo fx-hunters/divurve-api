@@ -3,6 +3,8 @@ package com.divurve.domain.plan;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -12,6 +14,7 @@ import com.divurve.common.exception.InvalidRequestException;
 import com.divurve.common.exception.NotFoundException;
 import com.divurve.domain.goal.PriorityConstraint;
 import com.divurve.domain.goal.entity.Goal;
+import com.divurve.domain.master.MasterDataService;
 import com.divurve.domain.plan.entity.Plan;
 import com.divurve.domain.plan.entity.PlanCalculationMeta;
 import com.divurve.domain.plan.entity.PlanStep;
@@ -47,6 +50,7 @@ class PlanStepExecutionServiceTest {
 
     private PlanRepository planRepository;
     private PlanStepRepository planStepRepository;
+    private MasterDataService masterDataService;
     private PlanStepExecutionService service;
     private Plan plan;
     private Goal goal;
@@ -55,10 +59,17 @@ class PlanStepExecutionServiceTest {
     void setUp() {
         planRepository = mock(PlanRepository.class);
         planStepRepository = mock(PlanStepRepository.class);
+        masterDataService = mock(MasterDataService.class);
+        // 통화 표시 자릿수는 DB 마스터에서 온다(이슈 #111). USD 시드와 같은 값을 세운다.
+        lenient().when(masterDataService.findCurrency(anyString()))
+                .thenReturn(Optional.of(new MasterDataService.CurrencyView(
+                        "USD", "미국 달러", "$", (short) 2, (short) 1, "self",
+                        false, true, null, "currency-usd", (short) 1)));
         service = new PlanStepExecutionService(
                 planRepository, planStepRepository,
                 new SkipRedistributor(new EqualSplitAllocator()),
-                new ExchangeCostCalculator(), new AdjustmentOptionSelector(), CLOCK);
+                new ExchangeCostCalculator(), new AdjustmentOptionSelector(),
+                masterDataService, CLOCK);
 
         User owner = User.createDemo("a@b.com", "사용자");
         goal = Goal.builder(owner, "여행 자금", "onetime", "travel", "USD")
@@ -497,22 +508,28 @@ class PlanStepExecutionServiceTest {
         ExchangeCostCalculator costs = new ExchangeCostCalculator();
         AdjustmentOptionSelector options = new AdjustmentOptionSelector();
         assertThatThrownBy(() -> new PlanStepExecutionService(
-                null, planStepRepository, redistributor, costs, options, CLOCK))
+                null, planStepRepository, redistributor, costs, options, masterDataService, CLOCK))
                 .isInstanceOf(NullPointerException.class);
         assertThatThrownBy(() -> new PlanStepExecutionService(
-                planRepository, null, redistributor, costs, options, CLOCK))
+                planRepository, null, redistributor, costs, options, masterDataService, CLOCK))
                 .isInstanceOf(NullPointerException.class);
         assertThatThrownBy(() -> new PlanStepExecutionService(
-                planRepository, planStepRepository, null, costs, options, CLOCK))
+                planRepository, planStepRepository, null, costs, options, masterDataService, CLOCK))
                 .isInstanceOf(NullPointerException.class);
         assertThatThrownBy(() -> new PlanStepExecutionService(
-                planRepository, planStepRepository, redistributor, null, options, CLOCK))
+                planRepository, planStepRepository, redistributor, null, options,
+                masterDataService, CLOCK))
                 .isInstanceOf(NullPointerException.class);
         assertThatThrownBy(() -> new PlanStepExecutionService(
-                planRepository, planStepRepository, redistributor, costs, null, CLOCK))
+                planRepository, planStepRepository, redistributor, costs, null,
+                masterDataService, CLOCK))
                 .isInstanceOf(NullPointerException.class);
         assertThatThrownBy(() -> new PlanStepExecutionService(
-                planRepository, planStepRepository, redistributor, costs, options, null))
+                planRepository, planStepRepository, redistributor, costs, options, null, CLOCK))
+                .isInstanceOf(NullPointerException.class);
+        assertThatThrownBy(() -> new PlanStepExecutionService(
+                planRepository, planStepRepository, redistributor, costs, options,
+                masterDataService, null))
                 .isInstanceOf(NullPointerException.class);
     }
 }

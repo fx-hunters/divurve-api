@@ -4,6 +4,7 @@ import com.divurve.api.dto.auth.LoginRequest;
 import com.divurve.api.dto.auth.RefreshRequest;
 import com.divurve.api.dto.auth.SignupRequest;
 import com.divurve.api.dto.auth.TokenResponse;
+import com.divurve.api.config.auth.ClientIp;
 import com.divurve.common.architecture.WebAdapter;
 import com.divurve.common.response.ApiResponse;
 import com.divurve.domain.auth.AuthDemoService;
@@ -55,8 +56,8 @@ public class AuthController {
                     responseCode = "409", description = "DUPLICATE_RESOURCE — 이미 가입된 이메일")
     })
     @PostMapping("/signup")
-    public ApiResponse<TokenResponse> signup(@Valid @RequestBody SignupRequest request) {
-        AuthTokens tokens = authService.signup(request.email(), request.password(), request.name());
+    public ApiResponse<TokenResponse> signup(@ClientIp String clientIp, @Valid @RequestBody SignupRequest request) {
+        AuthTokens tokens = authService.signup(request.email(), request.password(), request.name(), clientIp);
         return ApiResponse.of(toTokenResponse(tokens, false, false));
     }
 
@@ -70,8 +71,8 @@ public class AuthController {
                     responseCode = "401", description = "UNAUTHORIZED — 이메일 미존재 또는 비밀번호 불일치")
     })
     @PostMapping("/login")
-    public ApiResponse<TokenResponse> login(@Valid @RequestBody LoginRequest request) {
-        AuthResult result = authService.login(request.email(), request.password());
+    public ApiResponse<TokenResponse> login(@ClientIp String clientIp, @Valid @RequestBody LoginRequest request) {
+        AuthResult result = authService.login(request.email(), request.password(), clientIp);
         return ApiResponse.of(toTokenResponse(result.tokens(), false, result.onboarded()));
     }
 
@@ -85,8 +86,8 @@ public class AuthController {
                     responseCode = "401", description = "UNAUTHORIZED — 만료·위조된 리프레시 토큰")
     })
     @PostMapping("/refresh")
-    public ApiResponse<TokenResponse> refresh(@Valid @RequestBody RefreshRequest request) {
-        AuthResult result = authService.refreshAccessToken(request.refreshToken());
+    public ApiResponse<TokenResponse> refresh(@ClientIp String clientIp, @Valid @RequestBody RefreshRequest request) {
+        AuthResult result = authService.refreshAccessToken(request.refreshToken(), clientIp);
         return ApiResponse.of(toTokenResponse(result.tokens(), false, result.onboarded()));
     }
 
@@ -97,8 +98,8 @@ public class AuthController {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "발급 성공")
     })
     @PostMapping("/demo")
-    public ApiResponse<TokenResponse> demo() {
-        AuthTokens tokens = authDemoService.createDemoSession();
+    public ApiResponse<TokenResponse> demo(@ClientIp String clientIp) {
+        AuthTokens tokens = authDemoService.createDemoSession(clientIp);
         return ApiResponse.of(toTokenResponse(tokens, true, true));
     }
 

@@ -1,6 +1,7 @@
 package com.divurve.api.config.auth;
 
 import com.divurve.domain.port.TokenProvider;
+import com.divurve.domain.user.AdminAccessService;
 import java.util.List;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.method.support.HandlerMethodArgumentResolver;
@@ -13,14 +14,20 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
  *
  * <p>{@link CurrentUserArgumentResolver} 도 함께 등록한다 (이슈 #50) — 인터셉터가 채운 컨텍스트를
  * 컨트롤러 파라미터로 꺼내는 반대편 절반이다.
+ *
+ * <p>{@link CurrentAdminArgumentResolver}(관리자 인가)와 {@link ClientIpArgumentResolver}(접속 IP)도
+ * 같은 자리에서 등록한다 (이슈 #111). 셋 다 "컨트롤러 시그니처가 곧 요구사항" 이라는 같은 규약을
+ * 따르므로 배선도 한곳에 모은다.
  */
 @Configuration
 public class WebAuthConfig implements WebMvcConfigurer {
 
     private final TokenProvider tokenProvider;
+    private final AdminAccessService adminAccessService;
 
-    public WebAuthConfig(TokenProvider tokenProvider) {
+    public WebAuthConfig(TokenProvider tokenProvider, AdminAccessService adminAccessService) {
         this.tokenProvider = tokenProvider;
+        this.adminAccessService = adminAccessService;
     }
 
     @Override
@@ -32,5 +39,7 @@ public class WebAuthConfig implements WebMvcConfigurer {
     @Override
     public void addArgumentResolvers(List<HandlerMethodArgumentResolver> resolvers) {
         resolvers.add(new CurrentUserArgumentResolver());
+        resolvers.add(new CurrentAdminArgumentResolver(adminAccessService));
+        resolvers.add(new ClientIpArgumentResolver());
     }
 }

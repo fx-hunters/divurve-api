@@ -1,7 +1,10 @@
 package com.divurve.domain.user.entity;
 
+import com.divurve.domain.user.UserRole;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
@@ -54,6 +57,17 @@ public class User {
      */
     @Column(name = "sample_data_seeded", nullable = false)
     private boolean sampleDataSeeded;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "role", nullable = false, length = 16)
+    private UserRole role = UserRole.USER;
+
+    @Column(name = "last_login_at")
+    private Instant lastLoginAt;
+
+    /** IPv6 최대 표기가 45자다. 표시용 문자열이며 대역 연산을 하지 않으므로 {@code inet} 이 아니다. */
+    @Column(name = "last_login_ip", length = 45)
+    private String lastLoginIp;
 
     @Generated(event = EventType.INSERT)
     @Column(name = "created_at", insertable = false, updatable = false)
@@ -121,6 +135,43 @@ public class User {
 
     public Instant getOnboardedAt() {
         return onboardedAt;
+    }
+
+    public UserRole getRole() {
+        return role;
+    }
+
+    public Instant getLastLoginAt() {
+        return lastLoginAt;
+    }
+
+    public String getLastLoginIp() {
+        return lastLoginIp;
+    }
+
+    /** 운영자 권한을 가졌는지. {@code /api/v1/admin/**} 인가 판정의 유일한 근거다. */
+    public boolean isAdmin() {
+        return role == UserRole.ADMIN;
+    }
+
+    /**
+     * 운영자로 승격한다. 이미 운영자면 아무 일도 하지 않는다 — 부트스트랩이 기동마다 반복 호출되므로
+     * 멱등해야 한다.
+     */
+    public void promoteToAdmin() {
+        this.role = UserRole.ADMIN;
+    }
+
+    /**
+     * 접속 성공을 기록한다. 인증 결과에 영향을 주지 않는 부수 기록이므로, IP 를 알 수 없으면
+     * ({@code null}) 시각만 남긴다 — 시각을 버리는 것보다 낫다.
+     *
+     * @param at 접속 시각
+     * @param ip 접속 IP. 알 수 없으면 {@code null}
+     */
+    public void recordLogin(Instant at, String ip) {
+        this.lastLoginAt = at;
+        this.lastLoginIp = ip;
     }
 
     /** 초기 설정을 마쳤는지 여부. 로그인 응답의 {@code onboarded} 가 이 값이다(FR-IS-01). */

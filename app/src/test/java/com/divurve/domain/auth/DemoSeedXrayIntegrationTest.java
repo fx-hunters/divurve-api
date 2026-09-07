@@ -143,7 +143,7 @@ class DemoSeedXrayIntegrationTest extends RepositoryTestBase {
                 userRepository,
                 riskProfileService(),
                 CLOCK);
-        new AuthDemoService(userRepository, seeder, tokenProvider).createDemoSession();
+        new AuthDemoService(userRepository, seeder, tokenProvider, CLOCK).createDemoSession("127.0.0.1");
 
         entityManager.flush();
         entityManager.clear();
