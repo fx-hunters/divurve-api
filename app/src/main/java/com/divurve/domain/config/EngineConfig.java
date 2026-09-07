@@ -8,6 +8,7 @@ import com.divurve.engine.cost.CostCalculator;
 import com.divurve.engine.cost.EffectiveSpreadCalculator;
 import com.divurve.engine.diversification.DiversificationSimulator;
 import com.divurve.engine.fx.CrossRateDeriver;
+import com.divurve.engine.planner.AdjustmentOptionSelector;
 import com.divurve.engine.planner.BudgetFeasibilityEvaluator;
 import com.divurve.engine.planner.BusinessDayCalendar;
 import com.divurve.engine.planner.EqualSplitAllocator;
@@ -177,5 +178,10 @@ public class EngineConfig {
     @Bean
     public SkipRedistributor skipRedistributor(EqualSplitAllocator equalSplitAllocator) {
         return new SkipRedistributor(equalSplitAllocator);
+    }
+
+    @Bean
+    public AdjustmentOptionSelector adjustmentOptionSelector() {
+        return new AdjustmentOptionSelector();
     }
 }
