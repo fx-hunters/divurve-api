@@ -104,8 +104,12 @@
 
 **갱신 버튼 2개**:
 - `POST /api/v1/admin/fx-rates/refresh?lookback_days=14` (기본 14)
-  → `data`: `evicted_caches[]` · `total_upserted` · `has_failure` · `refreshed_at` ·
-  `elapsed_ms` · `pairs[]`(`pair_code`·`upserted`·`first_date`·`last_date`·`failure_reason`)
+  → `data`: `evicted_caches[]` · `total_upserted` · `has_failure` · `backfilled_days` ·
+  `confirmed_absent_days` · `complete` · `refreshed_at` · `elapsed_ms` ·
+  `pairs[]`(`pair_code`·`upserted`·`first_date`·`last_date`·`failure_reason`) ·
+  `coverage[]`(2-5 의 `pairs[]` 와 같은 모양)
+  **`complete` 가 이 버튼의 진짜 결과다** — `total_upserted` 는 갱신이 돌았다는 사실일 뿐,
+  구간이 완전해졌는지는 말하지 않는다. `complete=false` 면 `coverage[]` 의 `gaps` 를 함께 보여라.
 - `POST /api/v1/admin/macro/refresh` `{ "series_ids": ["DGS10"] }`
   → `data`: `evicted_caches[]` · `refreshed_at` · `elapsed_ms` ·
   `series[]`(`series_id`·`value`·`as_of`·`source`·`fetched_at`·`failure_reason`)
@@ -115,7 +119,34 @@
 > 이 화면의 목적이 "정말 갱신됐는가" 확인이다. `has_failure=true` 이거나 `failure_reason` 이
 > 있으면 붉게 강조하라. `total_upserted=0` 은 조용히 넘기면 안 되는 신호다.
 
-### 2-5. AI 테스트 2종
+### 2-5. 환율 구멍 조회 + 백필 (이슈 #116)
+
+계산 경로는 이제 `fx_rates` 를 1차 출처로 읽는다. **단, 구간이 완전할 때만이다** — 구멍이 하나라도
+있으면 서버가 조용히 ECOS 실시간 조회로 되돌아간다. 그래서 "지금 저장분이 쓰이고 있는가" 를
+사람이 확인할 수 있어야 한다. 이 화면이 그것이다.
+
+**조회**: `GET /api/v1/admin/fx-rates/gaps?pair_code=USDKRW&from=YYYY-MM-DD&to=YYYY-MM-DD`
+- `pair_code` 를 **비우면 저장 대상 전부**를 본다. `from`/`to` 를 생략하면 오늘 기준 1년이다.
+- 응답 `data.pairs[]`: `pair_code` · `rate_type` · `from` · `to` · `expected_business_days` ·
+  `covered_business_days` · `missing_business_days` · `coverage_ratio`(0.0~1.0) · `complete` ·
+  `gaps[]`(`from`·`to`·`business_days`)
+- **`complete` 를 가장 크게 보여라.** 이 값이 참일 때만 계산이 저장분을 쓴다.
+- `gaps[]` 는 연속 구간이다. 날짜 하나하나가 아니라 "9/2~9/3 이 통째로 비었다" 로 읽어라.
+
+**백필**: `POST /api/v1/admin/fx-rates/backfill?pair_code=&from=&to=`
+- 빠진 구간만 ECOS 에서 다시 받아 메운다. **전체 재적재가 아니다.** 초기 5년 백필도 이 경로다
+  (`from` 을 5년 전으로 주면 된다 — 최대 3,650일).
+- 응답 `data`: `total_filled` · `total_confirmed_absent` · `has_failure` · `complete` ·
+  `backfilled_at` · `pairs[]`(`pair_code`·`filled`·`confirmed_absent`·`missing_before`·
+  `missing_after`·`complete`·`remaining_gaps[]`·`failure_reason`)
+- **`confirmed_absent` 를 구멍으로 표시하지 마라.** 그것은 "ECOS 에 물었더니 그날은 고시가
+  없었다" 를 기록한 수다 — 공휴일이 여기로 들어간다. 오히려 이 수가 늘어야 커버리지가 완전해진다.
+- 백필 후에도 남은 `remaining_gaps` 가 진짜 문제다. ECOS 도 답하지 못했거나 우리가 못 받은
+  구간이므로 붉게 강조하라.
+- 오늘 날짜는 부재로 확정하지 않는다 — 아직 고시 전일 수 있어서다. `to` 에 오늘을 넣어도
+  오늘 칸이 채워지지 않는 것은 정상이다.
+
+### 2-6. AI 테스트 2종
 
 **(a) 자연어 설명** — `POST /api/v1/ai/explain`
 > 관리자 전용 경로가 **아니라 기존 사용자 API** 다. 로그인 토큰으로 그대로 호출한다.

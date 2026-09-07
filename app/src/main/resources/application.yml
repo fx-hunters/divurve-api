@@ -47,11 +47,17 @@ app:
         JPY_KRW: "0000002"   # 100엔당
         EUR_KRW: "0000003"
         CNY_KRW: "0000053"
-      # 환율 적재 배치 (이슈 #111, ERD 2단계). 기본 꺼짐 — 켜면 매일 ECOS 를 친다.
+      # 환율 적재 배치 (이슈 #111, ERD 2단계). 매일 ECOS 를 친다.
       # EcosProperties(record) 에는 넣지 않는다: @ConditionalOnProperty 와 @Scheduled 는
       # Environment 를 직접 읽으므로 바인딩이 필요 없고, record 컴포넌트를 늘리면 그 생성자를
       # 직접 호출하는 테스트들이 함께 깨진다.
-      ingest-schedule-enabled: ${ECOS_INGEST_SCHEDULE_ENABLED:false}
+      #
+      # 기본값을 true 로 바꿨다 (이슈 #116). 계산 경로가 fx_rates 를 1차 출처로 읽게 됐는데,
+      # 배치가 꺼져 있으면 그 표는 영원히 불완전해 읽기 경로가 매번 실시간 조회로 되돌아간다.
+      # 즉 #111·#116 이 만든 이득(배포 후 5년치 재조회 회피·ECOS 장애 내성)이 하나도 실현되지
+      # 않는다. 끄고 싶으면 ECOS_INGEST_SCHEDULE_ENABLED=false 로 명시한다 — 기본이 꺼짐이면
+      # "켜는 것을 잊었다" 가 조용한 성능 저하로 남고, 기본이 켜짐이면 끄는 쪽이 의도가 된다.
+      ingest-schedule-enabled: ${ECOS_INGEST_SCHEDULE_ENABLED:true}
       ingest-cron: ${ECOS_INGEST_CRON:0 30 9 * * *}   # KST 09:30 — ECOS 고시 이후
       ingest-lookback-days: ${ECOS_INGEST_LOOKBACK_DAYS:14}
     fred:

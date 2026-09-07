@@ -6,12 +6,14 @@ import static org.assertj.core.api.Assertions.within;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.divurve.common.exception.InvalidRequestException;
 import com.divurve.domain.fx.PerUnitFxRates;
+import com.divurve.domain.fx.StoredFxRates;
 import com.divurve.domain.port.FxRateHistoryProvider;
 import com.divurve.domain.port.FxRateHistoryProvider.HistoryRateSnapshot;
 import com.divurve.domain.port.FxRateProvider;
@@ -19,7 +21,9 @@ import com.divurve.domain.port.RateSnapshot;
 import com.divurve.engine.fx.CrossRateDeriver;
 import com.divurve.engine.weight.QuoteUnitNormalizer;
 import java.time.LocalDate;
+import java.math.BigDecimal;
 import java.util.List;
+import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -50,8 +54,9 @@ class CrossRateResolverTest {
     @BeforeEach
     void setUp() {
         resolver = new CrossRateResolver(
+                StoredFxRates.NONE,
                 historyProvider,
-                new PerUnitFxRates(fxRateProvider, new QuoteUnitNormalizer()),
+                new PerUnitFxRates(StoredFxRates.NONE, fxRateProvider, new QuoteUnitNormalizer()),
                 new CrossRateDeriver(),
                 new QuoteUnitNormalizer());
     }
@@ -172,20 +177,87 @@ class CrossRateResolverTest {
         assertThat(resolver.fetch(PairCode.parse("USDKRW"), END, LOOKBACK)).isEmpty();
     }
 
+    // ── 저장분 우선 (이슈 #116) ────────────────────────────────────
+
+    private CrossRateResolver dbFirst(StoredFxRates stored) {
+        return new CrossRateResolver(
+                stored,
+                historyProvider,
+                new PerUnitFxRates(StoredFxRates.NONE, fxRateProvider, new QuoteUnitNormalizer()),
+                new CrossRateDeriver(),
+                new QuoteUnitNormalizer());
+    }
+
+    @Test
+    @DisplayName("저장분이 완전하면 그것을 쓰고 ECOS 를 부르지 않는다")
+    void 저장분이_완전하면_그것을_쓴다() {
+        StoredFxRates stored = mock(StoredFxRates.class);
+        when(stored.perUnitSeries("USD", END, LOOKBACK)).thenReturn(Optional.of(List.of(
+                new StoredFxRates.Point(END, new BigDecimal("1382.400000")))));
+
+        List<HistoryRateSnapshot> series =
+                dbFirst(stored).fetch(PairCode.parse("USDKRW"), END, LOOKBACK);
+
+        assertThat(series).containsExactly(new HistoryRateSnapshot(END, 1382.40));
+        verify(historyProvider, never()).fetchHistorical(any(), any(), anyInt());
+    }
+
+    @Test
+    @DisplayName("저장분은 이미 1단위라 다시 접지 않는다 — 접으면 USDJPY 가 100배가 된다")
+    void 저장분은_다시_접지_않는다() {
+        StoredFxRates stored = mock(StoredFxRates.class);
+        when(stored.perUnitSeries("USD", END, LOOKBACK)).thenReturn(Optional.of(List.of(
+                new StoredFxRates.Point(END, new BigDecimal("1382.400000")))));
+        // fx_rates 는 1엔 기준으로 적재된다 (921.60 / 100).
+        when(stored.perUnitSeries("JPY", END, LOOKBACK)).thenReturn(Optional.of(List.of(
+                new StoredFxRates.Point(END, new BigDecimal("9.216000")))));
+
+        List<HistoryRateSnapshot> usdJpy =
+                dbFirst(stored).fetch(PairCode.parse("USDJPY"), END, LOOKBACK);
+
+        assertThat(usdJpy).hasSize(1);
+        assertThat(usdJpy.get(0).rate()).isCloseTo(150.0, within(1e-9));
+    }
+
+    @Test
+    @DisplayName("한 통화만 구멍이면 그 통화만 실시간으로 간다 — 조달 단위는 통화다")
+    void 통화별로_조달_경로가_갈린다() {
+        StoredFxRates stored = mock(StoredFxRates.class);
+        when(stored.perUnitSeries("USD", END, LOOKBACK)).thenReturn(Optional.of(List.of(
+                new StoredFxRates.Point(END, new BigDecimal("1382.400000")))));
+        when(stored.perUnitSeries("JPY", END, LOOKBACK)).thenReturn(Optional.empty());
+        when(historyProvider.fetchHistorical(eq("JPY_KRW"), any(LocalDate.class), anyInt()))
+                .thenReturn(List.of(new HistoryRateSnapshot(END, 921.60)));
+
+        List<HistoryRateSnapshot> usdJpy =
+                dbFirst(stored).fetch(PairCode.parse("USDJPY"), END, LOOKBACK);
+
+        verify(historyProvider, never()).fetchHistorical(eq("USD_KRW"), any(), anyInt());
+        assertThat(usdJpy).hasSize(1);
+        assertThat(usdJpy.get(0).rate()).isCloseTo(150.0, within(1e-9));
+    }
+
     @Test
     @DisplayName("생성자는 null 협력자를 거부한다")
     void null_협력자를_거부한다() {
         CrossRateDeriver deriver = new CrossRateDeriver();
         QuoteUnitNormalizer normalizer = new QuoteUnitNormalizer();
-        PerUnitFxRates rates = new PerUnitFxRates(fxRateProvider, normalizer);
+        PerUnitFxRates rates = new PerUnitFxRates(StoredFxRates.NONE, fxRateProvider, normalizer);
 
-        assertThatThrownBy(() -> new CrossRateResolver(null, rates, deriver, normalizer))
+        assertThatThrownBy(() ->
+                new CrossRateResolver(null, historyProvider, rates, deriver, normalizer))
                 .isInstanceOf(NullPointerException.class);
-        assertThatThrownBy(() -> new CrossRateResolver(historyProvider, null, deriver, normalizer))
+        assertThatThrownBy(() ->
+                new CrossRateResolver(StoredFxRates.NONE, null, rates, deriver, normalizer))
                 .isInstanceOf(NullPointerException.class);
-        assertThatThrownBy(() -> new CrossRateResolver(historyProvider, rates, null, normalizer))
+        assertThatThrownBy(() ->
+                new CrossRateResolver(StoredFxRates.NONE, historyProvider, null, deriver, normalizer))
                 .isInstanceOf(NullPointerException.class);
-        assertThatThrownBy(() -> new CrossRateResolver(historyProvider, rates, deriver, null))
+        assertThatThrownBy(() ->
+                new CrossRateResolver(StoredFxRates.NONE, historyProvider, rates, null, normalizer))
+                .isInstanceOf(NullPointerException.class);
+        assertThatThrownBy(() ->
+                new CrossRateResolver(StoredFxRates.NONE, historyProvider, rates, deriver, null))
                 .isInstanceOf(NullPointerException.class);
     }
 

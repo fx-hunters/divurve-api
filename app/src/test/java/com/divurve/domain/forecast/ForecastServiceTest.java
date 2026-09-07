@@ -1,5 +1,6 @@
 package com.divurve.domain.forecast;
 
+import com.divurve.domain.fx.StoredFxRates;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -74,9 +75,9 @@ class ForecastServiceTest {
     @BeforeEach
     void setUp() {
         PerUnitFxRates perUnitFxRates =
-                new PerUnitFxRates(fxRateProvider, new QuoteUnitNormalizer());
+                new PerUnitFxRates(StoredFxRates.NONE, fxRateProvider, new QuoteUnitNormalizer());
         service = new ForecastService(
-                new CrossRateResolver(historyProvider, perUnitFxRates,
+                new CrossRateResolver(StoredFxRates.NONE, historyProvider, perUnitFxRates,
                         new CrossRateDeriver(), new QuoteUnitNormalizer()),
                 perUnitFxRates,
                 eventProvider,

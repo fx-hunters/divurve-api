@@ -1,5 +1,6 @@
 package com.divurve.domain.auth;
 
+import com.divurve.domain.fx.StoredFxRates;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.entry;
 import static org.mockito.ArgumentMatchers.any;
@@ -172,7 +173,7 @@ class DemoSeedXrayIntegrationTest extends RepositoryTestBase {
                 krwAssetRepository,
                 userRepository,
                 riskProfileService(),
-                new FxAssetValuator(new PerUnitFxRates(stubFxRates(), new QuoteUnitNormalizer())),
+                new FxAssetValuator(new PerUnitFxRates(StoredFxRates.NONE, stubFxRates(), new QuoteUnitNormalizer())),
                 new WeightCalculator(),
                 new AttributionCalculator(),
                 new ConcentrationCalculator(),

@@ -34,13 +34,20 @@ class FxRateRefreshServiceTest {
 
     private ExternalDataCache externalDataCache;
     private FxRateIngestionService ingestionService;
+    private FxRateGapService gapService;
     private FxRateRefreshService service;
 
     @BeforeEach
     void setUp() {
         externalDataCache = mock(ExternalDataCache.class);
         ingestionService = mock(FxRateIngestionService.class);
-        service = new FxRateRefreshService(externalDataCache, ingestionService, CLOCK);
+        gapService = mock(FxRateGapService.class);
+        // 구멍 탐지 자체는 FxRateGapServiceTest 가 고정한다. 여기서 고정하는 것은 갱신의 순서와
+        // 리포트 조립이므로, 백필·커버리지는 "아무 일도 없었다" 로 둔다 (이슈 #116).
+        when(gapService.backfillStoredPairs(any(), any())).thenReturn(
+                new FxRateGapService.BackfillReport(List.of(), Instant.now(CLOCK)));
+        when(gapService.coverageOfStoredPairs(any(), any())).thenReturn(List.of());
+        service = new FxRateRefreshService(externalDataCache, ingestionService, gapService, CLOCK);
     }
 
     private static FxRateIngestionService.IngestionReport report(
@@ -94,14 +101,60 @@ class FxRateRefreshServiceTest {
         assertThat(service.refresh(END_DATE, 14).evictedCaches()).containsExactly("fx-latest");
     }
 
+    // ── 백필·커버리지 (이슈 #116) ────────────────────────────────────
+
+    @Test
+    @DisplayName("적재 다음에 백필을 돌리고 갱신 구간의 커버리지를 함께 싣는다")
+    void refresh_BackfillsAndReportsCoverage() {
+        when(externalDataCache.evict(any())).thenReturn(List.of());
+        when(ingestionService.ingest(any(), anyInt())).thenReturn(report());
+        when(gapService.backfillStoredPairs(END_DATE.minusDays(14), END_DATE)).thenReturn(
+                new FxRateGapService.BackfillReport(
+                        List.of(new FxRateGapService.PairBackfill(
+                                "USDKRW", 2, 1, 3, 0, true, List.of(), null)),
+                        Instant.now(CLOCK)));
+        when(gapService.coverageOfStoredPairs(END_DATE.minusDays(14), END_DATE)).thenReturn(
+                List.of(new FxRateGapService.PairCoverage(
+                        "USDKRW", "mid", END_DATE.minusDays(14), END_DATE, 10, 10, 0, 1.0,
+                        true, List.of())));
+
+        FxRateRefreshService.RefreshReport result = service.refresh(END_DATE, 14);
+
+        InOrder order = inOrder(ingestionService, gapService);
+        order.verify(ingestionService).ingest(END_DATE, 14);
+        order.verify(gapService).backfillStoredPairs(END_DATE.minusDays(14), END_DATE);
+
+        assertThat(result.backfilledDays()).isEqualTo(2);
+        assertThat(result.confirmedAbsentDays()).isEqualTo(1);
+        assertThat(result.complete()).isTrue();
+        assertThat(result.coverage()).singleElement()
+                .extracting(FxRateGapService.PairCoverage::pairCode).isEqualTo("USDKRW");
+    }
+
+    @Test
+    @DisplayName("백필이 실패하면 적재가 성공해도 실패로 알린다 — 구멍이 남은 것을 숨기지 않는다")
+    void refresh_BackfillFailureSurfaces() {
+        when(externalDataCache.evict(any())).thenReturn(List.of());
+        when(ingestionService.ingest(any(), anyInt())).thenReturn(report());
+        when(gapService.backfillStoredPairs(any(), any())).thenReturn(
+                new FxRateGapService.BackfillReport(
+                        List.of(new FxRateGapService.PairBackfill(
+                                "USDKRW", 0, 0, 3, 3, false, List.of(), "ECOS 응답 없음")),
+                        Instant.now(CLOCK)));
+
+        FxRateRefreshService.RefreshReport result = service.refresh(END_DATE, 14);
+
+        assertThat(result.hasFailure()).isTrue();
+    }
+
     @Test
     @DisplayName("null 의존은 거부한다")
     void nullDependencies_Throw() {
-        assertThatThrownBy(() -> new FxRateRefreshService(null, ingestionService, CLOCK))
+        assertThatThrownBy(() -> new FxRateRefreshService(null, ingestionService, gapService, CLOCK))
                 .isInstanceOf(NullPointerException.class);
-        assertThatThrownBy(() -> new FxRateRefreshService(externalDataCache, null, CLOCK))
+        assertThatThrownBy(() -> new FxRateRefreshService(externalDataCache, null, gapService, CLOCK))
                 .isInstanceOf(NullPointerException.class);
-        assertThatThrownBy(() -> new FxRateRefreshService(externalDataCache, ingestionService, null))
+        assertThatThrownBy(() -> new FxRateRefreshService(externalDataCache, ingestionService, gapService, null))
                 .isInstanceOf(NullPointerException.class);
     }
 }

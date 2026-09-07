@@ -2,6 +2,8 @@ package com.divurve.domain.fx;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.divurve.domain.port.FxRateProvider;
@@ -10,6 +12,7 @@ import com.divurve.engine.weight.QuoteUnitNormalizer;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -37,7 +40,7 @@ class PerUnitFxRatesTest {
 
     @BeforeEach
     void setUp() {
-        rates = new PerUnitFxRates(fxRateProvider, new QuoteUnitNormalizer());
+        rates = new PerUnitFxRates(StoredFxRates.NONE, fxRateProvider, new QuoteUnitNormalizer());
     }
 
     private void givenRate(String pairCode, String rate) {
@@ -107,12 +110,53 @@ class PerUnitFxRatesTest {
                 .hasMessageContaining("currencyCode");
     }
 
+    // ── 저장분 우선 (이슈 #116) ────────────────────────────────────
+
+    @Test
+    @DisplayName("저장분이 완전하면 그것을 쓰고 ECOS 를 부르지 않는다")
+    void 저장분이_있으면_그것을_쓴다() {
+        StoredFxRates stored = mock(StoredFxRates.class);
+        when(stored.latestPerUnitRate("USD")).thenReturn(Optional.of(new BigDecimal("1380.5")));
+        PerUnitFxRates dbFirst =
+                new PerUnitFxRates(stored, fxRateProvider, new QuoteUnitNormalizer());
+
+        assertThat(dbFirst.require("USD")).isEqualByComparingTo("1380.5");
+        verifyNoInteractions(fxRateProvider);
+    }
+
+    @Test
+    @DisplayName("저장분은 이미 1단위라 다시 접지 않는다 — JPY 가 100분의 1이 되면 안 된다")
+    void 저장분은_다시_접지_않는다() {
+        StoredFxRates stored = mock(StoredFxRates.class);
+        when(stored.latestPerUnitRate("JPY")).thenReturn(Optional.of(new BigDecimal("9.2160")));
+        PerUnitFxRates dbFirst =
+                new PerUnitFxRates(stored, fxRateProvider, new QuoteUnitNormalizer());
+
+        assertThat(dbFirst.require("JPY")).isEqualByComparingTo("9.2160");
+    }
+
+    @Test
+    @DisplayName("저장분이 비면 ECOS 로 간다 — 구멍이 있는 구간을 부분 데이터로 쓰지 않는다")
+    void 저장분이_비면_ECOS로_간다() {
+        StoredFxRates stored = mock(StoredFxRates.class);
+        when(stored.latestPerUnitRate("USD")).thenReturn(Optional.empty());
+        givenRate("USD_KRW", "1382.40");
+        PerUnitFxRates dbFirst =
+                new PerUnitFxRates(stored, fxRateProvider, new QuoteUnitNormalizer());
+
+        assertThat(dbFirst.require("USD")).isEqualByComparingTo("1382.40");
+    }
+
     @Test
     @DisplayName("생성자는 null 협력자를 거부한다")
     void null_협력자를_거부한다() {
-        assertThatThrownBy(() -> new PerUnitFxRates(null, new QuoteUnitNormalizer()))
+        assertThatThrownBy(() ->
+                new PerUnitFxRates(null, fxRateProvider, new QuoteUnitNormalizer()))
                 .isInstanceOf(NullPointerException.class);
-        assertThatThrownBy(() -> new PerUnitFxRates(fxRateProvider, null))
+        assertThatThrownBy(() ->
+                new PerUnitFxRates(StoredFxRates.NONE, null, new QuoteUnitNormalizer()))
+                .isInstanceOf(NullPointerException.class);
+        assertThatThrownBy(() -> new PerUnitFxRates(StoredFxRates.NONE, fxRateProvider, null))
                 .isInstanceOf(NullPointerException.class);
     }
 }

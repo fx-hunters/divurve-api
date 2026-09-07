@@ -4,12 +4,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.divurve.api.dto.admin.AdminCurrencyResponse;
 import com.divurve.api.dto.admin.AdminExtractPreviewRequest;
 import com.divurve.api.dto.admin.AdminExtractPreviewResponse;
+import com.divurve.api.dto.admin.AdminFxRateBackfillResponse;
+import com.divurve.api.dto.admin.AdminFxRateCoverageResponse;
 import com.divurve.api.dto.admin.AdminFxRateSeriesResponse;
 import com.divurve.api.dto.admin.AdminMacroRefreshRequest;
 import com.divurve.api.dto.admin.AdminMacroRefreshResponse;
@@ -18,6 +21,7 @@ import com.divurve.api.dto.admin.AdminUserDataResponse;
 import com.divurve.api.dto.admin.AdminUserListResponse;
 import com.divurve.common.response.ApiResponse;
 import com.divurve.domain.event.EconEventExtractPreviewService;
+import com.divurve.domain.fx.FxRateGapService;
 import com.divurve.domain.fx.FxRateIngestionService;
 import com.divurve.domain.fx.FxRateQueryService;
 import com.divurve.domain.fx.FxRateRefreshService;
@@ -61,6 +65,7 @@ class AdminControllerTest {
     @Mock private MasterDataService masterDataService;
     @Mock private FxRateQueryService fxRateQueryService;
     @Mock private FxRateRefreshService fxRateRefreshService;
+    @Mock private FxRateGapService fxRateGapService;
     @Mock private MacroRefreshService macroRefreshService;
     @Mock private EconEventExtractPreviewService econEventExtractPreviewService;
 
@@ -180,7 +185,8 @@ class AdminControllerTest {
 
         private AdminFxRateController controller() {
             return new AdminFxRateController(
-                    fxRateQueryService, fxRateRefreshService, macroRefreshService, CLOCK);
+                    fxRateQueryService, fxRateRefreshService, fxRateGapService,
+                    macroRefreshService, CLOCK);
         }
 
         @Test
@@ -229,7 +235,7 @@ class AdminControllerTest {
                             List.of("fx-latest"),
                             List.of(new FxRateIngestionService.PairResult(
                                     "EURKRW", 0, null, null, "ECOS 응답 없음")),
-                            0, true, Instant.now(CLOCK), 120L));
+                            0, true, 0, 0, List.of(), Instant.now(CLOCK), 120L));
 
             ApiResponse<AdminRefreshResponse> response =
                     controller().refreshFxRates(ADMIN_ID, null);
@@ -255,7 +261,8 @@ class AdminControllerTest {
         void refreshFxRates_UsesGivenLookback() {
             when(fxRateRefreshService.refresh(any(), anyInt())).thenReturn(
                     new FxRateRefreshService.RefreshReport(
-                            List.of(), List.of(), 0, false, Instant.now(CLOCK), 0L));
+                            List.of(), List.of(), 0, false, 0, 0, List.of(),
+                            Instant.now(CLOCK), 0L));
 
             controller().refreshFxRates(ADMIN_ID, 30);
 
@@ -292,6 +299,105 @@ class AdminControllerTest {
             assertThat(response.data().series().get(0).fetchedAt()).isEqualTo(Instant.now(CLOCK));
             assertThat(response.data().series().get(1).value()).isNull();
             assertThat(response.data().series().get(1).failureReason()).isEqualTo("FRED 응답 없음");
+        }
+
+        // ── 구멍 조회·백필 (이슈 #116) ────────────────────────────────────
+
+        private FxRateGapService.PairCoverage coverage(String pairCode, boolean complete) {
+            return new FxRateGapService.PairCoverage(
+                    pairCode, "mid", LocalDate.of(2025, 9, 7), LocalDate.of(2026, 9, 7),
+                    10, complete ? 10 : 8, complete ? 0 : 2, complete ? 1.0 : 0.8, complete,
+                    complete ? List.of() : List.of(new FxRateGapService.Gap(
+                            LocalDate.of(2026, 9, 2), LocalDate.of(2026, 9, 3), 2)));
+        }
+
+        @Test
+        @DisplayName("pair_code 를 비우면 저장 대상 전부를 본다")
+        void gaps_DefaultsToAllStoredPairs() {
+            when(fxRateGapService.coverageOfStoredPairs(any(), any()))
+                    .thenReturn(List.of(coverage("USDKRW", false)));
+
+            // 비었다는 것은 null 일 수도, 공백일 수도 있다 — 둘 다 "전부 보기" 다.
+            controller().gaps(ADMIN_ID, null, null, null);
+            ApiResponse<AdminFxRateCoverageResponse> response =
+                    controller().gaps(ADMIN_ID, "  ", null, null);
+
+            verify(fxRateGapService, times(2)).coverageOfStoredPairs(
+                    LocalDate.now(CLOCK).minusDays(AdminFxRateController.DEFAULT_RANGE_DAYS),
+                    LocalDate.now(CLOCK));
+            assertThat(response.data().pairs()).singleElement().satisfies(pair -> {
+                assertThat(pair.pairCode()).isEqualTo("USDKRW");
+                assertThat(pair.complete()).isFalse();
+                assertThat(pair.missingBusinessDays()).isEqualTo(2);
+                assertThat(pair.coverageRatio()).isEqualTo(0.8);
+                assertThat(pair.gaps()).containsExactly(new AdminFxRateCoverageResponse.Gap(
+                        LocalDate.of(2026, 9, 2), LocalDate.of(2026, 9, 3), 2));
+            });
+        }
+
+        @Test
+        @DisplayName("pair_code 를 주면 그 쌍만 본다")
+        void gaps_SinglePair() {
+            LocalDate from = LocalDate.of(2026, 1, 1);
+            LocalDate to = LocalDate.of(2026, 9, 7);
+            when(fxRateGapService.coverage(eq("USDKRW"), eq(from), eq(to)))
+                    .thenReturn(coverage("USDKRW", true));
+
+            ApiResponse<AdminFxRateCoverageResponse> response =
+                    controller().gaps(ADMIN_ID, "USDKRW", from, to);
+
+            assertThat(response.data().pairs()).singleElement()
+                    .extracting(AdminFxRateCoverageResponse.PairCoverage::complete)
+                    .isEqualTo(true);
+        }
+
+        @Test
+        @DisplayName("백필도 pair_code 를 비우면 저장 대상 전부를 돈다")
+        void backfill_DefaultsToAllStoredPairs() {
+            when(fxRateGapService.backfillStoredPairs(any(), any())).thenReturn(
+                    new FxRateGapService.BackfillReport(
+                            List.of(new FxRateGapService.PairBackfill(
+                                    "USDKRW", 2, 1, 3, 0, true, List.of(), null)),
+                            Instant.now(CLOCK)));
+
+            controller().backfill(ADMIN_ID, "  ", null, null);
+            ApiResponse<AdminFxRateBackfillResponse> response =
+                    controller().backfill(ADMIN_ID, null, null, null);
+
+            assertThat(response.data().totalFilled()).isEqualTo(2);
+            assertThat(response.data().totalConfirmedAbsent()).isEqualTo(1);
+            assertThat(response.data().complete()).isTrue();
+            assertThat(response.data().hasFailure()).isFalse();
+            assertThat(response.data().pairs()).singleElement().satisfies(pair -> {
+                assertThat(pair.pairCode()).isEqualTo("USDKRW");
+                assertThat(pair.missingBefore()).isEqualTo(3);
+                assertThat(pair.missingAfter()).isZero();
+                assertThat(pair.remainingGaps()).isEmpty();
+            });
+        }
+
+        @Test
+        @DisplayName("백필에 pair_code 를 주면 그 쌍만 돈다 — 남은 구멍이 응답에 드러난다")
+        void backfill_SinglePair() {
+            LocalDate from = LocalDate.of(2026, 1, 1);
+            LocalDate to = LocalDate.of(2026, 9, 7);
+            when(fxRateGapService.backfill("USDKRW", from, to)).thenReturn(
+                    new FxRateGapService.PairBackfill(
+                            "USDKRW", 0, 0, 2, 2, false,
+                            List.of(new FxRateGapService.Gap(
+                                    LocalDate.of(2026, 9, 2), LocalDate.of(2026, 9, 3), 2)),
+                            "ECOS 응답 없음"));
+
+            ApiResponse<AdminFxRateBackfillResponse> response =
+                    controller().backfill(ADMIN_ID, "USDKRW", from, to);
+
+            assertThat(response.data().hasFailure()).isTrue();
+            assertThat(response.data().complete()).isFalse();
+            assertThat(response.data().backfilledAt()).isEqualTo(Instant.now(CLOCK));
+            assertThat(response.data().pairs()).singleElement().satisfies(pair -> {
+                assertThat(pair.failureReason()).isEqualTo("ECOS 응답 없음");
+                assertThat(pair.remainingGaps()).hasSize(1);
+            });
         }
     }
 

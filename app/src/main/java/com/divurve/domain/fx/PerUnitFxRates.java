@@ -21,6 +21,13 @@ import org.slf4j.LoggerFactory;
  *
  * <p>정규화까지 여기서 끝낸다 — ECOS 는 JPY 를 원/100엔으로 고시하므로
  * {@link QuoteUnitNormalizer} 로 1단위 환율에 접은 값만 도메인으로 내보낸다(명세 §1.4, ERD §4.1).
+ *
+ * <p><b>조달 순서는 저장분 우선이다 (이슈 #116).</b> {@link StoredFxRates} 가 값을 주면 그것을
+ * 쓰고, 최근 구간에 구멍이 있어 빈 값이 오면 ECOS 를 실시간 호출한다. 이 클래스가 최신 환율의
+ * 유일한 창구라, 여기만 바꾸면 소비처가 함께 전환된다.
+ *
+ * <p>저장분은 <b>이미 1단위로 접혀</b> 있으므로 그 경로에서는 정규화하지 않는다. 정규화는
+ * ECOS 고시값(원/100엔)에만 필요하다 — 저장분에 다시 태우면 JPY 가 100분의 1이 된다.
  */
 @UseCase
 public class PerUnitFxRates {
@@ -30,10 +37,15 @@ public class PerUnitFxRates {
     /** 원화 표시 고시. 외부 어댑터는 {@code <통화>_KRW} 형태의 통화쌍만 안다. */
     private static final String QUOTE_CURRENCY = "KRW";
 
+    private final StoredFxRates storedFxRates;
     private final FxRateProvider fxRateProvider;
     private final QuoteUnitNormalizer quoteUnitNormalizer;
 
-    public PerUnitFxRates(FxRateProvider fxRateProvider, QuoteUnitNormalizer quoteUnitNormalizer) {
+    public PerUnitFxRates(
+            StoredFxRates storedFxRates,
+            FxRateProvider fxRateProvider,
+            QuoteUnitNormalizer quoteUnitNormalizer) {
+        this.storedFxRates = Objects.requireNonNull(storedFxRates, "storedFxRates");
         this.fxRateProvider = Objects.requireNonNull(fxRateProvider, "fxRateProvider");
         this.quoteUnitNormalizer =
                 Objects.requireNonNull(quoteUnitNormalizer, "quoteUnitNormalizer");
@@ -50,6 +62,14 @@ public class PerUnitFxRates {
      */
     public BigDecimal require(String currencyCode) {
         Objects.requireNonNull(currencyCode, "currencyCode");
+
+        // 저장분이 완전할 때만 그것을 쓴다 (이슈 #116). 구멍이 있으면 StoredFxRates 가 빈 값을
+        // 돌려주므로 여기서 완전성을 다시 따지지 않는다 — 판정이 두 곳에 있으면 갈라진다.
+        Optional<BigDecimal> stored = storedFxRates.latestPerUnitRate(currencyCode);
+        if (stored.isPresent()) {
+            return stored.get();
+        }
+
         RateSnapshot snapshot = fxRateProvider.fetchLatest(currencyCode + "_" + QUOTE_CURRENCY);
         if (snapshot == null) {
             throw new IllegalStateException("환율 조회 결과가 없습니다: " + currencyCode);

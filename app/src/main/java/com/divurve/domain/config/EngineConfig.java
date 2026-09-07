@@ -8,6 +8,7 @@ import com.divurve.engine.cost.CostCalculator;
 import com.divurve.engine.cost.EffectiveSpreadCalculator;
 import com.divurve.engine.diversification.DiversificationSimulator;
 import com.divurve.engine.fx.CrossRateDeriver;
+import com.divurve.engine.fx.FxRateGapDetector;
 import com.divurve.engine.planner.AdjustmentOptionSelector;
 import com.divurve.engine.planner.BudgetFeasibilityEvaluator;
 import com.divurve.engine.planner.BusinessDayCalendar;
@@ -147,6 +148,15 @@ public class EngineConfig {
     @Bean
     public BusinessDayCalendar businessDayCalendar() {
         return new BusinessDayCalendar();
+    }
+
+    /**
+     * 환율 구멍 탐지기 (이슈 #116). 영업일 판정을 {@link BusinessDayCalendar} 에 위임하므로
+     * 공휴일이 달력에 들어오는 날 구멍 판정도 함께 정확해진다.
+     */
+    @Bean
+    public FxRateGapDetector fxRateGapDetector(BusinessDayCalendar businessDayCalendar) {
+        return new FxRateGapDetector(businessDayCalendar);
     }
 
     @Bean
