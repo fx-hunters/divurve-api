@@ -24,13 +24,24 @@ public interface UserRepository extends JpaRepository<User, UUID> {
      * <p>두 조건을 파생 쿼리 메서드가 아니라 JPQL 한 개로 처리하는 이유 — 조건이 각각 있고 없고를
      * 조합하면 메서드가 4개가 되고, 조건이 하나 늘 때마다 배가 된다. {@code null} 은 "조건 없음" 이다.
      *
+     * <p><b>{@code cast(... as string)} 이 왜 필요한가 (이슈 #118).</b> 캐스트가 없으면 Hibernate 가
+     * {@code :keyword} 를 타입 없는 바인드 파라미터로 내보내고, PostgreSQL 은 타입을 못 정한 파라미터를
+     * {@code bytea} 로 결정한다. 그러면 {@code lower(bytea)} 라는 없는 함수를 부르게 되어
+     * {@code SQLGrammarException} 이 나고, 전역 핸들러가 이를 500 {@code INTERNAL_ERROR} 로 내보낸다.
+     * <b>키워드를 넘기면 통과하고 넘기지 않으면 터진다</b> — PostgreSQL 은 {@code :keyword is null} 이
+     * 참이어서 뒷부분을 실행하지 않더라도 <b>파싱 시점에 식 전체의 타입을 정하기 때문</b>이다.
+     * 그래서 "필터 없이 전체 목록" 이라는 가장 흔한 호출이 정확히 깨졌다.
+     *
+     * <p>{@code :demo} 는 {@code u.isDemo = :demo} 로 boolean 컬럼과 비교되어 타입이 추론되므로
+     * 캐스트가 필요 없다. 그래도 대칭을 위해 붙이지 않는다 — 필요 없는 캐스트는 왜 있는지 설명할 수 없다.
+     *
      * @param keyword 이메일 또는 이름의 부분일치 검색어. {@code null} 이면 전체
      * @param demo    데모 계정만/일반 계정만. {@code null} 이면 전체
      */
     @Query("select u from User u "
             + "where (:keyword is null "
-            + "       or lower(u.email) like lower(concat('%', :keyword, '%')) "
-            + "       or lower(u.name) like lower(concat('%', :keyword, '%'))) "
+            + "       or lower(u.email) like lower(concat('%', cast(:keyword as string), '%')) "
+            + "       or lower(u.name) like lower(concat('%', cast(:keyword as string), '%'))) "
             + "  and (:demo is null or u.isDemo = :demo)")
     Page<User> searchForAdmin(
             @Param("keyword") String keyword, @Param("demo") Boolean demo, Pageable pageable);
