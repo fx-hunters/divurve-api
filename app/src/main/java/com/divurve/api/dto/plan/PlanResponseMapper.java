@@ -136,7 +136,7 @@ public final class PlanResponseMapper {
     private static PlanResponse.CalculationMeta toCalculationMeta(
             Instant createdAt, PlanCalculationMeta meta, String currencyCode) {
         if (meta == null) {
-            // V13 이전에 저장된 계획에는 계산 메타가 없다. 값을 지어내지 않고 비워 둔다 —
+            // V16 이전에 저장된 계획에는 계산 메타가 없다. 값을 지어내지 않고 비워 둔다 —
             // 어떤 전제로 계산됐는지 모르는 계획에 지금의 가정을 적으면 감사 기록이 거짓이 된다.
             return null;
         }

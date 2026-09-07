@@ -24,7 +24,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataIntegrityViolationException;
 
 /**
- * V13 이 추가한 스키마 제약이 실제 Postgres 에서 작동하는지 검증한다 (플래너 명세 §21).
+ * V16 이 추가한 스키마 제약이 실제 Postgres 에서 작동하는지 검증한다 (플래너 명세 §21).
  *
  * <p>목표당 활성 계획 하나 · 회차 번호 유일성 · 완료 요청 멱등성은 지금까지 <b>애플리케이션
  * 코드로만</b> 지켜졌다. 동시 요청이 겹치면 코드만으로는 막히지 않으므로 DB 제약으로 올렸고,

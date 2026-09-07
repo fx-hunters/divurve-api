@@ -7,7 +7,7 @@
 -- 근거 없는 수치로 지목된 컬럼(plans.safe_ratio · split_count · opportunity_amount ·
 -- opportunity_trigger_rate, 명세 §23)의 DROP 은 여기서 하지 않는다. 아직 PlanConfirmService ·
 -- PlanController · PlanResponseMapper 가 그 값을 읽고 쓰기 때문이다. 소비자를 걷어낸 뒤
--- 이슈 #85 의 V14 에서 정리한다(expand → contract).
+-- 이슈 #85 의 V17 에서 정리한다(expand → contract).
 --
 -- ddl-auto=validate 이므로 컬럼/타입은 JPA 엔티티와 정확히 일치해야 한다.
 
