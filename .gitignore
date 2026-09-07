@@ -43,7 +43,7 @@ build/
 # 커밋하지 않는다. 형식은 application-dev.yml.example 참고.
 app/src/main/resources/application-dev.yml
 
-#.claude/agents
+# .claude/agents/ 는 무시하지 않는다 — 서브 에이전트 정의는 팀이 공유하는 설정이므로 추적한다.
 
 # 작업용 git worktree — 레포 체크아웃이 통째로 들어 있다. 절대 커밋하지 않는다.
 .claude/worktrees/
