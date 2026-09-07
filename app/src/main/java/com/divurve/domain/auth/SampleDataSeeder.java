@@ -15,6 +15,7 @@ import com.divurve.domain.holding.entity.Holding;
 import com.divurve.domain.holding.entity.KrwAsset;
 import com.divurve.domain.holding.entity.PurchaseFxRate;
 import com.divurve.domain.settings.RiskProfileService;
+import com.divurve.domain.user.UserRepository;
 import com.divurve.domain.user.entity.User;
 import java.math.BigDecimal;
 import java.time.Clock;
@@ -37,6 +38,9 @@ import java.time.LocalDate;
  *
  * <p>계산 로직은 없다. 위험성향도 유형을 시드하지 않고 진단 응답만 제출해
  * {@link RiskProfileService} 가 결정론적으로 산출하게 한다(CLAUDE.md 1장 — 수치는 계산 로직만 만든다).
+ *
+ * <p>시드 끝에 {@link User#markSampleDataSeeded()} 로 표시를 남긴다 — 두 경로가 모두 이 클래스를
+ * 지나므로 표시가 한 곳에서 처리되고, 어느 쪽이든 누락되지 않는다(이슈 #112).
  */
 @UseCase
 public class SampleDataSeeder {
@@ -45,6 +49,7 @@ public class SampleDataSeeder {
     private final DepositRepository depositRepository;
     private final KrwAssetRepository krwAssetRepository;
     private final GoalRepository goalRepository;
+    private final UserRepository userRepository;
     private final RiskProfileService riskProfileService;
     private final Clock clock;
 
@@ -53,12 +58,14 @@ public class SampleDataSeeder {
             DepositRepository depositRepository,
             KrwAssetRepository krwAssetRepository,
             GoalRepository goalRepository,
+            UserRepository userRepository,
             RiskProfileService riskProfileService,
             Clock clock) {
         this.holdingRepository = holdingRepository;
         this.depositRepository = depositRepository;
         this.krwAssetRepository = krwAssetRepository;
         this.goalRepository = goalRepository;
+        this.userRepository = userRepository;
         this.riskProfileService = riskProfileService;
         this.clock = clock;
     }
@@ -105,6 +112,11 @@ public class SampleDataSeeder {
 
         // 유형·점수·기준선은 여기서 만들지 않는다 — 응답만 제출하고 산출은 RiskProfileScorer 가 한다.
         riskProfileService.submitSimple(owner.getId(), DemoSampleData.RISK_PROFILE_ANSWERS);
+
+        // 이 자산이 샘플이라는 사실을 남긴다 — 프론트의 "체험용 데이터" 배지 판정 근거다(이슈 #112).
+        // is_demo 로는 갈리지 않는다: 가입 계정도 실연동 전까지 같은 샘플을 받기 때문이다.
+        owner.markSampleDataSeeded();
+        userRepository.save(owner);
     }
 
     private PurchaseFxRate purchaseFxRate(BigDecimal rateKrw, LocalDate purchasedOn) {

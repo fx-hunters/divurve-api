@@ -12,6 +12,7 @@ import com.divurve.domain.holding.entity.KrwAsset;
 import com.divurve.domain.settings.RiskProfileService;
 import com.divurve.domain.settings.RiskProfileView;
 import com.divurve.domain.user.UserRepository;
+import com.divurve.domain.user.entity.User;
 import com.divurve.engine.attribution.AttributionCalculator;
 import com.divurve.engine.concentration.ConcentrationCalculator;
 import com.divurve.engine.concentration.ConcentrationThresholdTable;
@@ -94,7 +95,7 @@ public class XrayService {
      */
     @Transactional(readOnly = true)
     public PortfolioSnapshot getPortfolio(UUID userId) {
-        requireUser(userId);
+        User user = requireUser(userId);
 
         List<Holding> holdings = holdingRepository.findByOwner_Id(userId);
         List<Deposit> deposits = depositRepository.findByOwner_Id(userId);
@@ -131,7 +132,8 @@ public class XrayService {
                         concentration.gapPp()),
                 new SensitivityView(sensitivity.totalKrw(), sensitivity.byCurrency()),
                 // portfolio_snapshots 가 아직 없으므로 전일 대비는 "모름"이다(명세 §5.3: 스냅샷 없으면 null).
-                null);
+                null,
+                user.isSampleDataSeeded());
     }
 
     /**
@@ -211,8 +213,8 @@ public class XrayService {
                 byHolding);
     }
 
-    private void requireUser(UUID userId) {
-        userRepository.findById(userId)
+    private User requireUser(UUID userId) {
+        return userRepository.findById(userId)
                 .orElseThrow(() -> new NotFoundException("사용자를 찾을 수 없습니다."));
     }
 
@@ -243,6 +245,7 @@ public class XrayService {
      * api 는 이 도메인 경계 record 만 본다.
      *
      * @param dayChangeKrw 전일 대비 변화. 스냅샷이 없으면 {@code null}
+     * @param sampleData   이 자산이 시드된 샘플인지 (이슈 #112). 계정이 데모인지({@code is_demo})와는 다른 사실이다
      */
     public record PortfolioSnapshot(
             long totalAssetKrw,
@@ -253,7 +256,8 @@ public class XrayService {
             Map<String, Double> exposure,
             ConcentrationView concentration,
             SensitivityView sensitivity1pct,
-            Long dayChangeKrw) {
+            Long dayChangeKrw,
+            boolean sampleData) {
     }
 
     /**

@@ -52,12 +52,15 @@ class XrayControllerTest {
                 new XrayService.ConcentrationView(
                         "USD", 0.6388, 0.60, "risk_profile.balanced", "above_threshold", 0.0388),
                 new XrayService.SensitivityView(247_200L, sensitivity),
-                null));
+                null,
+                true));
 
         ApiResponse<XrayResponse> response = controller().getXray(userId);
 
         assertThat(response.meta()).isNotNull();
         XrayResponse data = response.data();
+        // 체험용 데이터 배지의 근거 — meta.is_demo 로는 가입 계정의 샘플을 판정할 수 없다(이슈 #112).
+        assertThat(data.isSampleData()).isTrue();
         assertThat(data.totalAssetKrw()).isEqualTo(68_400_000L);
         assertThat(data.krwAssetKrw()).isEqualTo(43_680_000L);
         assertThat(data.fxAssetKrw()).isEqualTo(24_720_000L);
@@ -80,7 +83,8 @@ class XrayControllerTest {
                 0L, 0L, 0L, 0.0, Map.of(), Map.of(),
                 new XrayService.ConcentrationView(null, null, null, null, "unknown", null),
                 new XrayService.SensitivityView(0L, Map.of()),
-                null));
+                null,
+                false));
 
         XrayResponse data = controller().getXray(userId).data();
 

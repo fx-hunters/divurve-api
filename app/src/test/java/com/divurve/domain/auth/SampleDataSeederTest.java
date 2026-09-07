@@ -19,6 +19,7 @@ import com.divurve.domain.holding.entity.Deposit;
 import com.divurve.domain.holding.entity.Holding;
 import com.divurve.domain.holding.entity.KrwAsset;
 import com.divurve.domain.settings.RiskProfileService;
+import com.divurve.domain.user.UserRepository;
 import com.divurve.domain.user.entity.User;
 import java.time.Clock;
 import java.time.Instant;
@@ -55,6 +56,8 @@ class SampleDataSeederTest {
     @Mock
     private GoalRepository goalRepository;
     @Mock
+    private UserRepository userRepository;
+    @Mock
     private RiskProfileService riskProfileService;
 
     private final User owner = User.create("me@divurve.com", "나", "hash");
@@ -68,6 +71,7 @@ class SampleDataSeederTest {
                 depositRepository,
                 krwAssetRepository,
                 goalRepository,
+                userRepository,
                 riskProfileService,
                 Clock.fixed(NOW, ZoneOffset.UTC));
     }
@@ -155,6 +159,16 @@ class SampleDataSeederTest {
         assertThat(saved.getBudgetPeriod()).isEqualTo(sample.budgetPeriod());
         assertThat(saved.isSpeculative()).isEqualTo(sample.isSpeculative());
         assertThat(saved.getStatus()).isEqualTo(sample.status());
+    }
+
+    @Test
+    void 시드한_사용자에_샘플_표시를_남긴다() {
+        // is_demo 로는 갈리지 않는다 — 가입 계정도 실연동 전까지 같은 샘플을 받는다(이슈 #112).
+        // 표시가 이 한 지점에 있어야 데모·가입 어느 경로로 들어와도 누락되지 않는다.
+        seeder.seed(owner);
+
+        assertThat(owner.isSampleDataSeeded()).isTrue();
+        verify(userRepository).save(owner);
     }
 
     @Test

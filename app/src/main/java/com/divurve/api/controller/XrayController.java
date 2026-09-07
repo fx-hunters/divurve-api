@@ -82,7 +82,8 @@ public class XrayController {
                 new XrayResponse.Sensitivity(
                         snapshot.sensitivity1pct().totalKrw(),
                         snapshot.sensitivity1pct().byCurrency()),
-                snapshot.dayChangeKrw()));
+                snapshot.dayChangeKrw(),
+                snapshot.sampleData()));
     }
 
     @Operation(summary = "손익 4분해",
