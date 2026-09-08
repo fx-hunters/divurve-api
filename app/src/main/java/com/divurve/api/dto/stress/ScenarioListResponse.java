@@ -32,7 +32,9 @@ public record ScenarioListResponse(
      * @param isDefault      기본 제공 시나리오 여부
      * @param sortOrder      화면 노출 순서
      */
-    @Schema(description = "시나리오 한 건")
+    @Schema(name = "StressScenario",
+            description = "선택 가능한 스트레스 시나리오 마스터 한 건. 실행 결과에 붙는 "
+                    + "StressRunResponse.Scenario 와 구조가 달라 이름을 분리했다(이슈 #88)")
     public record Scenario(
             @Schema(description = "시나리오 코드", example = "equity_down_krw_weak")
             String scenarioCode,

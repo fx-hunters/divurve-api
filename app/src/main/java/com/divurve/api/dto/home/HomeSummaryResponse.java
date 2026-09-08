@@ -38,7 +38,9 @@ public record HomeSummaryResponse(
 
     /** 위험성향·Fit 관계. */
     public record ProfileFitDto(
-            @Schema(example = "balanced") String grade,
+            @Schema(description = "대표 유형 코드. 위험성향 미측정이면 null", example = "balanced",
+                    nullable = true)
+            String grade,
             @Schema(example = "above_threshold") String concentrationStatus) {
     }
 
@@ -47,7 +49,9 @@ public record HomeSummaryResponse(
             @Schema(example = "0.361") double fxRatio,
             @Schema(example = "USD") String topCurrencyCode,
             @Schema(example = "247200") @JsonProperty("sensitivity_1pct_krw") long sensitivity1pctKrw,
-            @Schema(example = "84000") Long dayChangeKrw) {
+            @Schema(description = "전일 대비 변화(원). 스냅샷이 없으면 null", example = "84000",
+                    nullable = true)
+            Long dayChangeKrw) {
     }
 
     /** 목표 영역. {@code route_enabled} 는 이슈 #84 에서 제거했다 — 기능이 항상 열려 있다. */

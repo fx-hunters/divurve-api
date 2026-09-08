@@ -47,7 +47,9 @@ public record XrayResponse(
         boolean isSampleData) {
 
     /** 통화별 노출 금액과 비중. */
-    @Schema(description = "통화별 노출")
+    @Schema(name = "CurrencyExposure",
+            description = "통화별 노출 (스냅샷형). 이름이 겹치는 다른 Exposure record 와 구분하기 위해 "
+                    + "고유 스키마명을 부여했다(이슈 #88)")
     public record Exposure(
             @Schema(description = "ISO 4217 통화코드", example = "USD") String currencyCode,
             @Schema(description = "원화 평가액", example = "15790000") long krw,
@@ -55,7 +57,10 @@ public record XrayResponse(
     }
 
     /** 집중도 진단 (명세 §5.3). 성향 미측정이면 기준선이 없고 상태는 {@code unknown} 이다. */
-    @Schema(description = "주력 통화 집중도")
+    @Schema(name = "ConcentrationSnapshot",
+            description = "주력 통화 집중도 (스냅샷형 — 현재 시점 하나만 표현한다). "
+                    + "가정 전후를 비교하는 FitPreviewResponse.Concentration 과 구조가 달라 "
+                    + "이름을 분리했다(이슈 #88)")
     public record Concentration(
             @Schema(description = "주력 통화. 외화자산이 없으면 null", example = "USD", nullable = true)
             String topCurrencyCode,
@@ -77,7 +82,10 @@ public record XrayResponse(
     }
 
     /** 환율 1퍼센트 변동 민감도 (FR-XR-05). */
-    @Schema(description = "환율 1퍼센트 민감도")
+    @Schema(name = "SensitivitySnapshot",
+            description = "환율 1퍼센트 민감도 (스냅샷형 — 현재 시점 하나만 표현한다). "
+                    + "가정 전후를 비교하는 FitPreviewResponse.Sensitivity 와 구조가 달라 "
+                    + "이름을 분리했다(이슈 #88)")
     public record Sensitivity(
             @Schema(description = "전 통화 합계 (원)", example = "247200") long totalKrw,
             @Schema(description = "통화코드 → 변화액(원)") Map<String, Long> byCurrency) {
