@@ -66,9 +66,24 @@ public class AiController {
                         outcome.explainLevel(),
                         outcome.explainDomain(),
                         outcome.fallback()),
-                new ExplainResponse.Verification(outcome.numericMatch(), outcome.blockedPhrases()));
+                verificationOf(outcome));
 
         return ApiResponse.of(response, resolveMeta(request));
+    }
+
+    /**
+     * 검증 측정값과 폴백 사유를 그대로 옮긴다 (이슈 #122).
+     *
+     * <p>폴백에 이르는 경로가 넷인데 응답이 전부 같은 값으로 수렴해, 어느 검증에서 걸렸는지 —
+     * 애초에 검증까지 가기는 했는지 — 를 화면에서 알 수 없었다. 사유를 값으로 내려 그 넷을 가른다.
+     */
+    private ExplainResponse.Verification verificationOf(AiService.ExplainOutcome outcome) {
+        AiService.FallbackReason reason = outcome.fallbackReason();
+        return new ExplainResponse.Verification(
+                outcome.numericMatch(),
+                outcome.regimeDisclosed(),
+                outcome.blockedPhrases(),
+                reason == null ? null : reason.code());
     }
 
     /**

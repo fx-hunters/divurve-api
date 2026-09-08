@@ -154,9 +154,22 @@
 - 요청: `{ "surface": "forecast_summary", "facts": { ... } }` — `facts` 는 JSON 편집기로 자유 입력
 - 응답 `data.explanation`: `sentences[]` · `sentence_count` · `explain_level` · `explain_domain` ·
   `fallback`
-- 응답 `data.verification`: `numeric_match` · `blocked_phrases[]`
-- **`fallback=true` 면 눈에 띄게 경고하라** — LLM 결과가 검증에 걸려 고정 템플릿이 나간 상태다.
-  `verification` 을 반드시 함께 보여라: 어떤 검증에서 걸렸는지가 이 화면의 핵심 정보다.
+- 응답 `data.verification`: `fallback_reason` · `numeric_match` · `regime_disclosed` ·
+  `blocked_phrases[]`
+- **`fallback=true` 면 눈에 띄게 경고하고, 바로 옆에 `fallback_reason` 을 붙여라.** 이 값이 이
+  화면의 핵심 정보다 — 폴백 경로가 넷인데 이 값 없이는 어느 것이었는지 알 수 없다.
+
+  | `fallback_reason` | 화면에 쓸 말 | 함께 보여줄 것 |
+  |---|---|---|
+  | `provider_error` | "AI 호출이 실패했습니다 (타임아웃·rate limit 등)" | 서버 로그를 봐야 함을 안내 |
+  | `blocked_phrases` | "금지 표현이 검출돼 차단했습니다" | **`blocked_phrases[]` 를 반드시 나열하라** |
+  | `budget_exhausted` | "총예산(8초)이 소진돼 재시도를 생략했습니다" | `numeric_match`/`regime_disclosed` |
+  | `verification_failed` | "검증에 걸렸습니다" | `numeric_match`/`regime_disclosed` 중 `false` 인 쪽 |
+
+- **`numeric_match`·`regime_disclosed` 는 `null` 일 수 있다. `null` 은 "실패"가 아니라 "검증까지
+  가지 못했다" 다** — `false` 로 표시하지 마라. "—" 나 "측정 안 됨" 으로 그려라.
+  `provider_error`·`blocked_phrases` 경로가 여기 해당한다.
+- `fallback=false` 면 `fallback_reason` 은 `null` 이고 두 검증값은 `true` 다.
 - `explain_level`/`explain_domain` 은 요청이 아니라 **로그인 사용자의 설정**에서 온다.
   입력란을 만들지 마라.
 - **이 API 는 실패해도 200 을 준다.** HTTP 상태로 성공을 판정하지 마라.
@@ -166,9 +179,14 @@
 - 요청: `{ "source_url": "https://...", "text": "뉴스 원문 전문" }`
   - `source_url` 은 선택. `text` 는 필수이며 20,000자까지.
   - 큰 textarea 로 만들어라.
-- 응답 `data`: `extractor` · `count` · `previewed_at` · `candidates[]`
+- 응답 `data`: `extractor` · `count` · `previewed_at` · `candidates[]` · `failure_reason`
 - `candidates[]`: `event_date` · `region` · `title` · `impact` · `valid` · `reject_reason`
 - **`valid=false` 행의 `reject_reason` 을 붉게 표시하라. 이것이 이 화면의 주된 산출물이다.**
+- **`failure_reason` 이 있으면 그것을 가장 먼저, 붉게 보여라.** 추출기 호출 자체가 터진 경우다
+  (응답 형식 위반·키 오류·rate limit·타임아웃). 이때 `count=0` 은 "뽑을 게 없었다" 가 아니라
+  "부르다 터졌다" 이므로 정상 0건과 섞어 보여주면 안 된다. 근본 원인이 괄호로 함께 실린다.
+- **이 API 는 외부 연동이 실패해도 200 을 준다.** HTTP 상태로 성공을 판정하지 마라 —
+  `failure_reason` 이 없어야 성공이다.
 - `event_date`·`region`·`impact` 는 **검증 전 원시값**이라 형식이 어긋난 문자열이나 `null` 이
   올 수 있다. 그대로 보여라 — 그것을 보는 것이 목적이다. 파싱해서 정규화하지 마라.
 - `extractor` 가 `NoOpEconEventExtractor` 면 "추출기가 꺼져 있습니다
