@@ -9,7 +9,6 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.TreeSet;
 import org.springframework.beans.factory.annotation.Value;
 
 /**
@@ -42,13 +41,13 @@ public class ExplainRequestGuard {
     /**
      * 서술을 허용하는 화면. <b>여기 없는 값은 400 이다.</b>
      *
-     * <p>{@code home_market_summary} 가 함께 있는 이유 — 프론트가 <b>이미 두 화면에서</b> 부른다
-     * (예측 화면 {@code forecast-screen.tsx}, 홈 시장 요약 {@code market-summary-section.tsx}).
-     * 백엔드 코드에는 {@code forecast_summary} 상수만 있어 하나로 보이지만, 그 하나만 허용하면
-     * 홈 화면의 설명이 즉시 400 으로 깨진다. 화면을 늘릴 때는 여기에 값을 더해야 한다.
+     * <p><b>목록을 직접 들고 있지 않는다</b>(이슈 #153). 예전에는 이 자리에 {@code Set.of(...)} 로
+     * 화면을 열거했는데, 화면을 늘릴 때 여기와 프롬프트 규약을 <b>따로</b> 고쳐야 해서 한쪽만
+     * 고쳐지는 일이 실제로 일어났다 — 프론트가 이미 배포된 화면에서 {@code xray_exposure} 를
+     * 보내는데 이 목록에만 없어서, 내부 계약 메시지가 사용자 화면에 그대로 노출됐다.
+     * 지금은 {@link ExplainSurface} 한 곳이 허용 여부·문장 수·프롬프트 맥락을 함께 정한다.
      */
-    public static final Set<String> ALLOWED_SURFACES = Set.of(
-            AiService.SURFACE_FORECAST_SUMMARY, AiService.SURFACE_HOME_MARKET_SUMMARY);
+    public static final Set<String> ALLOWED_SURFACES = ExplainSurface.codes();
 
     /**
      * 정규화된 {@code facts} JSON 의 최대 길이. 실제 화면이 보내는 {@code facts} 는 200자 안쪽이므로
@@ -125,7 +124,7 @@ public class ExplainRequestGuard {
         }
         throw new InvalidRequestException(
                 "surface '%s' 는 서술 대상이 아닙니다. 허용: %s"
-                        .formatted(echo(surface), String.join(", ", new TreeSet<>(ALLOWED_SURFACES))),
+                        .formatted(echo(surface), String.join(", ", ALLOWED_SURFACES)),
                 "surface");
     }
 

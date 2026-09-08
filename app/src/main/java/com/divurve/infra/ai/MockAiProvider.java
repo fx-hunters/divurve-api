@@ -1,7 +1,7 @@
 package com.divurve.infra.ai;
 
 import com.divurve.common.architecture.ExternalAdapter;
-import com.divurve.domain.ai.AiService;
+import com.divurve.domain.ai.ExplainSurface;
 import com.divurve.domain.port.AiProvider;
 import com.divurve.domain.settings.UserSettingsService;
 import java.util.ArrayList;
@@ -18,11 +18,13 @@ import java.util.Objects;
  * v1 Mock 은 "위험도는 중간 수준입니다", "다양한 자산군에 분산되어 있으며" 처럼 입력에 없는 값을
  * 임의로 채웠다. 이 구현은 {@code facts} 에 실제로 있는 값만 문장에 담는다 — 없는 키는 언급하지 않는다.
  *
- * <p><b>실 LLM 어댑터와 공존한다</b>(이슈 #73). {@link ClaudeAiProvider} 는
- * {@code app.external.anthropic.enabled=true} 일 때만 만들어지고 {@code @Primary} 를 갖는다 —
- * 빈이 2개여도 주입은 그쪽으로 간다(이슈 #38 유형의 기동 실패는 일어나지 않는다). 이 클래스는
- * 그때도 살아남아 <b>{@code forecast_summary} 이외 화면</b>(홈·X-Ray·Fit·스트레스)을 계속 담당한다.
- * 그 화면들은 문장 수·어조 규약이 문서에 확정되지 않아 실 API 로 옮기지 않았다.
+ * <p><b>실 LLM 이 켜지면 이 클래스는 사용자 요청을 받지 않는다</b>(이슈 #135).
+ * {@link ClaudeAiProvider} 는 {@code app.external.anthropic.enabled=true} 일 때만 만들어지고
+ * {@code @Primary} 를 갖는다 — 빈이 2개여도 주입은 그쪽으로 간다(이슈 #38 유형의 기동 실패는
+ * 일어나지 않는다). 예전에는 실 LLM 이 켜진 뒤에도 이 클래스가 {@code forecast_summary} 이외
+ * 화면을 위임받아 계속 담당했고, 아래 {@link #genericSentences} 의 키-값 나열이 그대로 사용자
+ * 화면에 나갔다(이슈 #135). 지금 실 LLM 은 {@link com.divurve.domain.ai.ExplainSurface} 가 아는
+ * 화면 전부를 처리하므로, 이 클래스는 <b>실 LLM 이 꺼진 로컬·테스트 환경</b>의 provider 로만 남는다.
  */
 @ExternalAdapter
 public class MockAiProvider implements AiProvider {
@@ -39,7 +41,7 @@ public class MockAiProvider implements AiProvider {
         Objects.requireNonNull(context.surface(), "surface");
         Objects.requireNonNull(context.facts(), "facts");
 
-        List<String> sentences = AiService.SURFACE_FORECAST_SUMMARY.equals(context.surface())
+        List<String> sentences = ExplainSurface.FORECAST_SUMMARY.code().equals(context.surface())
                 ? forecastSummarySentences(context)
                 : genericSentences(context);
         // 템플릿이므로 LLM 을 부르지 않았다 — 토큰 0 을 명시한다(이슈 #143).

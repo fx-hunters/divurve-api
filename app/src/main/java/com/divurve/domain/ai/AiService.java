@@ -68,17 +68,8 @@ import org.springframework.transaction.annotation.Transactional;
 @UseCase
 public class AiService {
 
-    /** {@code forecast_summary} 는 항상 4문장이다 (FR-FC-07, FR-AI-04). */
-    public static final String SURFACE_FORECAST_SUMMARY = "forecast_summary";
-
     /**
-     * 홈 화면의 시장 요약 (이슈 #139). 프롬프트 규약이 확정되지 않아 실 LLM 어댑터는 이 화면을
-     * {@code MockAiProvider} 템플릿에 넘기지만, <b>프론트가 실제로 보내는 값</b>이므로
-     * {@link ExplainRequestGuard#ALLOWED_SURFACES} 에 반드시 들어 있어야 한다.
-     */
-    public static final String SURFACE_HOME_MARKET_SUMMARY = "home_market_summary";
-
-    /** 캐시 키를 만들 때 재료 사이에 끼우는 구분자 — 재료 값에는 나타날 수 없는 문자를 쓴다. */
+     * 캐시 키를 만들 때 재료 사이에 끼우는 구분자 — 재료 값에는 나타날 수 없는 문자를 쓴다. */
     private static final char KEY_SEPARATOR = '\u0000';
 
     /**
