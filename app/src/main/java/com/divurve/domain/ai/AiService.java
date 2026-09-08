@@ -141,8 +141,8 @@ public class AiService {
 
         for (int attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
             if (attempt > 0 && !clock.instant().isBefore(deadline)) {
-                log.warn("AI 서술 예산({}초) 소진 — 재시도 없이 폴백한다. surface={}",
-                        TOTAL_BUDGET_SECONDS, surface);
+                log.warn("AI 서술 예산({}) 소진 — 재시도 없이 폴백한다. surface={}",
+                        totalBudget, surface);
                 fallbackReason = FallbackReason.BUDGET_EXHAUSTED;
                 break;
             }
