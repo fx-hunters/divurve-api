@@ -13,6 +13,9 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-data-jpa")
     implementation("org.springframework.boot:spring-boot-starter-validation")
 
+    // 헬스체크 (이슈 #145) — Render 슬립 방지 핑의 대상. health 엔드포인트만 노출한다(application.yml).
+    implementation("org.springframework.boot:spring-boot-starter-actuator")
+
     // DB / 마이그레이션
     runtimeOnly("org.postgresql:postgresql")
     implementation("org.flywaydb:flyway-core")
