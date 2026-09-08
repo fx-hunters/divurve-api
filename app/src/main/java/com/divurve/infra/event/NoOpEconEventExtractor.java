@@ -23,8 +23,8 @@ import java.util.Objects;
 public class NoOpEconEventExtractor implements EconEventExtractor {
 
     @Override
-    public List<ExtractedEvent> extract(RawArticle article) {
+    public ExtractOutcome extract(RawArticle article) {
         Objects.requireNonNull(article, "article");
-        return List.of();
+        return ExtractOutcome.withoutLlm(List.of());
     }
 }

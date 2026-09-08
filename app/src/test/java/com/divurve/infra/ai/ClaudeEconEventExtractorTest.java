@@ -3,6 +3,7 @@ package com.divurve.infra.ai;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.divurve.domain.port.TokenUsage;
 import com.divurve.domain.port.EconEventExtractor.ExtractedEvent;
 import com.divurve.domain.port.EconEventExtractor.RawArticle;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -35,9 +36,9 @@ class ClaudeEconEventExtractorTest {
     void extract_는_실_API_응답을_이벤트_목록으로_돌려준다() {
         messageClient.response = new ClaudeMessageClient.Completion(
             "{\"events\": [{\"event_date\": \"2026-09-17\", \"region\": \"US\", "
-                + "\"title\": \"FOMC 회의\", \"impact\": 3}]}", 200, 80);
+                + "\"title\": \"FOMC 회의\", \"impact\": 3}]}", TokenUsage.of(200, 80));
 
-        List<ExtractedEvent> events = sut.extract(ARTICLE);
+        List<ExtractedEvent> events = sut.extract(ARTICLE).events();
 
         assertThat(events).containsExactly(
             new ExtractedEvent("2026-09-17", "US", "FOMC 회의", 3));
@@ -49,16 +50,16 @@ class ClaudeEconEventExtractorTest {
     void extract_는_코드펜스로_감싼_응답도_받는다() {
         messageClient.response = new ClaudeMessageClient.Completion(
             "```json\n{\"events\": [{\"event_date\": \"2026-09-17\", \"region\": \"US\", "
-                + "\"title\": \"FOMC\", \"impact\": 2}]}\n```", 100, 40);
+                + "\"title\": \"FOMC\", \"impact\": 2}]}\n```", TokenUsage.of(100, 40));
 
-        assertThat(sut.extract(ARTICLE)).hasSize(1);
+        assertThat(sut.extract(ARTICLE).events()).hasSize(1);
     }
 
     @Test
     void extract_는_빈_events_배열이면_빈_목록을_돌려준다() {
-        messageClient.response = new ClaudeMessageClient.Completion("{\"events\": []}", 50, 10);
+        messageClient.response = new ClaudeMessageClient.Completion("{\"events\": []}", TokenUsage.of(50, 10));
 
-        assertThat(sut.extract(ARTICLE)).isEmpty();
+        assertThat(sut.extract(ARTICLE).events()).isEmpty();
     }
 
     @Test
@@ -67,14 +68,14 @@ class ClaudeEconEventExtractorTest {
             "{\"events\": ["
                 + "{\"event_date\": \"2026-09-17\", \"region\": \"US\", \"title\": \"FOMC\", \"impact\": 3},"
                 + "{\"event_date\": \"2026-09-24\", \"region\": \"EU\", \"title\": \"ECB\", \"impact\": 1}"
-                + "]}", 300, 120);
+                + "]}", TokenUsage.of(300, 120));
 
-        assertThat(sut.extract(ARTICLE)).hasSize(2);
+        assertThat(sut.extract(ARTICLE).events()).hasSize(2);
     }
 
     @Test
     void extract_는_고정_스키마를_벗어난_응답에_형식_예외를_던진다() {
-        messageClient.response = new ClaudeMessageClient.Completion("아무 말이나 합니다.", 10, 5);
+        messageClient.response = new ClaudeMessageClient.Completion("아무 말이나 합니다.", TokenUsage.of(10, 5));
 
         assertThatThrownBy(() -> sut.extract(ARTICLE))
             .isInstanceOf(AiResponseFormatException.class);

@@ -8,12 +8,15 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.divurve.domain.event.EconEventIngestionService.IngestionReport;
+import com.divurve.domain.ai.AiCallLogRecorder;
 import com.divurve.domain.port.EconEventExtractor;
 import com.divurve.domain.port.EconEventExtractor.ExtractedEvent;
 import com.divurve.domain.port.EconEventExtractor.RawArticle;
 import com.divurve.domain.port.RawArticleSource;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.Clock;
+import java.time.ZoneOffset;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -39,12 +42,16 @@ class EconEventIngestionServiceTest {
     private EconEventExtractor extractor;
     @Mock
     private EconEventRepository repository;
+    @Mock
+    private AiCallLogRecorder aiCallLogRecorder;
 
     private EconEventIngestionService service;
 
     @BeforeEach
     void setUp() {
-        service = new EconEventIngestionService(source, extractor, repository, new EconEventValidator());
+        service = new EconEventIngestionService(source, extractor, repository,
+                new EconEventValidator(), aiCallLogRecorder,
+                Clock.fixed(Instant.parse("2026-09-08T00:00:00Z"), ZoneOffset.UTC));
     }
 
     private static RawArticle article(String sourceUrl, String text) {
@@ -67,7 +74,7 @@ class EconEventIngestionServiceTest {
         RawArticle article = article("https://news.example.com/1", "2026-09-07 FOMC 회의 예정");
         when(source.fetchRecent()).thenReturn(List.of(article));
         ExtractedEvent candidate = new ExtractedEvent("2026-09-07", "US", "FOMC 회의", 3);
-        when(extractor.extract(article)).thenReturn(List.of(candidate));
+        when(extractor.extract(article)).thenReturn(EconEventExtractor.ExtractOutcome.withoutLlm(List.of(candidate)));
         when(repository.existsByEventDateAndRegionAndTitle(
                 LocalDate.of(2026, 9, 7), "US", "FOMC 회의")).thenReturn(false);
 
@@ -85,7 +92,7 @@ class EconEventIngestionServiceTest {
         when(source.fetchRecent()).thenReturn(List.of(article));
         ExtractedEvent valid = new ExtractedEvent("2026-09-07", "US", "FOMC 회의", 3);
         ExtractedEvent invalidImpact = new ExtractedEvent("2026-09-08", "US", "CPI 발표", 9);
-        when(extractor.extract(article)).thenReturn(List.of(valid, invalidImpact));
+        when(extractor.extract(article)).thenReturn(EconEventExtractor.ExtractOutcome.withoutLlm(List.of(valid, invalidImpact)));
         when(repository.existsByEventDateAndRegionAndTitle(
                 LocalDate.of(2026, 9, 7), "US", "FOMC 회의")).thenReturn(false);
 
@@ -101,7 +108,7 @@ class EconEventIngestionServiceTest {
         RawArticle article = article("https://news.example.com/3", "2026-09-07 FOMC 회의 예정");
         when(source.fetchRecent()).thenReturn(List.of(article));
         ExtractedEvent candidate = new ExtractedEvent("2026-09-07", "US", "FOMC 회의", 3);
-        when(extractor.extract(article)).thenReturn(List.of(candidate));
+        when(extractor.extract(article)).thenReturn(EconEventExtractor.ExtractOutcome.withoutLlm(List.of(candidate)));
         when(repository.existsByEventDateAndRegionAndTitle(
                 LocalDate.of(2026, 9, 7), "US", "FOMC 회의")).thenReturn(true);
 
@@ -120,7 +127,7 @@ class EconEventIngestionServiceTest {
         when(source.fetchRecent()).thenReturn(List.of(failingArticle, okArticle));
         when(extractor.extract(failingArticle)).thenThrow(new IllegalStateException("파싱 실패"));
         ExtractedEvent candidate = new ExtractedEvent("2026-09-07", "US", "FOMC 회의", 3);
-        when(extractor.extract(okArticle)).thenReturn(List.of(candidate));
+        when(extractor.extract(okArticle)).thenReturn(EconEventExtractor.ExtractOutcome.withoutLlm(List.of(candidate)));
         when(repository.existsByEventDateAndRegionAndTitle(
                 LocalDate.of(2026, 9, 7), "US", "FOMC 회의")).thenReturn(false);
 

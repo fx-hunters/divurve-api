@@ -60,8 +60,13 @@ class EconEventIngestionSchedulerTest {
         private final java.util.function.Supplier<IngestionReport> behavior;
 
         StubIngestionService(java.util.function.Supplier<IngestionReport> behavior) {
-            super(List::of, article -> List.of(), Mockito.mock(EconEventRepository.class),
-                new EconEventValidator());
+            super(List::of,
+                article -> com.divurve.domain.port.EconEventExtractor.ExtractOutcome
+                    .withoutLlm(List.of()),
+                Mockito.mock(EconEventRepository.class),
+                new EconEventValidator(),
+                Mockito.mock(com.divurve.domain.ai.AiCallLogRecorder.class),
+                java.time.Clock.systemUTC());
             this.behavior = behavior;
         }
 

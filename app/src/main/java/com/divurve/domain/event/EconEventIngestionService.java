@@ -7,7 +7,15 @@ import com.divurve.domain.event.entity.EconEvent;
 import com.divurve.domain.port.EconEventExtractor;
 import com.divurve.domain.port.EconEventExtractor.ExtractedEvent;
 import com.divurve.domain.port.EconEventExtractor.RawArticle;
+import com.divurve.domain.ai.AiCallLogRecorder;
+import com.divurve.domain.ai.AiCallOutcome;
+import com.divurve.domain.ai.entity.AiCallLog;
+import com.divurve.domain.port.EconEventExtractor.ExtractOutcome;
 import com.divurve.domain.port.RawArticleSource;
+import com.divurve.domain.port.TokenUsage;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
 import org.slf4j.Logger;
@@ -27,9 +35,12 @@ import org.slf4j.LoggerFactory;
  * 예상 밖 예외가 배치 전체를 죽이지 않는다. 예외는 로그로 남기고 {@code failedArticles} 로 집계한다
  * ({@code rejected} 는 검증기에서 탈락한 이벤트 후보 건수만 센다 — 단위가 다르다).
  *
- * <p><b>감사 기록은 호출 메타만 남긴다</b> — {@code infra/ai/ClaudeAiProvider#logCallMetadata} 와
- * 같은 방식이다. {@code audit_logs} 테이블이 아직 없고(#73), 원문 전문·프롬프트를 로그에 남기면
- * 마스킹 범위가 정해지기 전에 개인정보·민감정보를 흘릴 수 있어서다. 소스 URL과 건수만 남긴다.
+ * <p><b>호출 메타는 {@code ai_call_logs} 에 남긴다</b>(이슈 #143). 원문 하나마다 추출 호출 한 건을
+ * 기록한다 — 성공이면 모델·토큰 사용량, 실패면 {@code error} 와 사유 요약이다. 원문 전문·프롬프트는
+ * 남기지 않는다(이슈 #56, 마스킹 범위 미정).
+ *
+ * <p><b>기록이 배치를 죽이지 않는다.</b> {@link AiCallLogRecorder} 가 저장 실패를 삼키므로, 비용
+ * 기록 때문에 적재가 멈추는 일은 없다 — 이 배치의 부분 실패 허용 원칙과 같은 방향이다.
  */
 @UseCase
 public class EconEventIngestionService {
@@ -40,16 +51,22 @@ public class EconEventIngestionService {
     private final EconEventExtractor extractor;
     private final EconEventRepository repository;
     private final EconEventValidator validator;
+    private final AiCallLogRecorder aiCallLogRecorder;
+    private final Clock clock;
 
     public EconEventIngestionService(
             RawArticleSource source,
             EconEventExtractor extractor,
             EconEventRepository repository,
-            EconEventValidator validator) {
+            EconEventValidator validator,
+            AiCallLogRecorder aiCallLogRecorder,
+            Clock clock) {
         this.source = Objects.requireNonNull(source, "source");
         this.extractor = Objects.requireNonNull(extractor, "extractor");
         this.repository = Objects.requireNonNull(repository, "repository");
         this.validator = Objects.requireNonNull(validator, "validator");
+        this.aiCallLogRecorder = Objects.requireNonNull(aiCallLogRecorder, "aiCallLogRecorder");
+        this.clock = Objects.requireNonNull(clock, "clock");
     }
 
     /**
@@ -70,8 +87,12 @@ public class EconEventIngestionService {
     }
 
     private void ingestArticle(RawArticle article, Counters counters) {
+        Instant startedAt = Instant.now(clock);
         try {
-            List<ExtractedEvent> candidates = extractor.extract(article);
+            ExtractOutcome outcome = extractor.extract(article);
+            recordCall(startedAt, outcome.model(), outcome.usage(), AiCallOutcome.SUCCESS, null);
+
+            List<ExtractedEvent> candidates = outcome.events();
             counters.extracted += candidates.size();
             for (ExtractedEvent candidate : candidates) {
                 ingestCandidate(candidate, article, counters);
@@ -79,10 +100,28 @@ public class EconEventIngestionService {
             log.info("econ_events_extracted source_url={} candidates={}",
                     article.sourceUrl(), candidates.size());
         } catch (RuntimeException e) {
+            // 실패도 기록한다 — 원문이 건너뛰어진 사실이 남지 않으면, 관리자 화면에서 추출
+            // 호출이 줄어든 것이 "원문이 없었다" 인지 "전부 실패했다" 인지 구분되지 않는다.
+            recordCall(startedAt, null, TokenUsage.NONE, AiCallOutcome.ERROR,
+                    AiCallLogRecorder.summarize(e));
             log.warn("econ_events_extraction_failed source_url={} reason={}",
                     article.sourceUrl(), e.getMessage());
             counters.failedArticles++;
         }
+    }
+
+    /**
+     * 추출 호출 한 건을 기록한다. {@code user_id} 는 없다 — 이 경로는 배치에서 돈다.
+     */
+    private void recordCall(
+            Instant startedAt,
+            String model,
+            TokenUsage usage,
+            AiCallOutcome outcome,
+            String errorSummary) {
+        int latencyMs = (int) Duration.between(startedAt, Instant.now(clock)).toMillis();
+        aiCallLogRecorder.record(AiCallLog.extract(
+                startedAt, null, model, usage, outcome, latencyMs, errorSummary));
     }
 
     private void ingestCandidate(ExtractedEvent candidate, RawArticle article, Counters counters) {

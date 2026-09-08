@@ -9,6 +9,7 @@ import com.divurve.api.dto.ai.ExplainResponse;
 import com.divurve.common.exception.InvalidRequestException;
 import com.divurve.common.response.ApiResponse;
 import com.divurve.domain.ai.AiService;
+import com.divurve.domain.port.AuthPrincipal;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -34,16 +35,21 @@ class AiControllerTest {
         return new AiController(aiService);
     }
 
+    /** 데모가 아닌 일반 세션의 principal. 컨트롤러가 is_demo 를 도메인으로 넘기는 경로다(이슈 #143). */
+    private AuthPrincipal principal() {
+        return new AuthPrincipal(userId, false);
+    }
+
     @Test
     void explain_은_서술_결과를_data와_meta로_래핑한다() {
         Map<String, Object> facts = Map.of("pair_code", "USDKRW", "current_rate", 1382.40);
-        when(aiService.explain(userId, "forecast_summary", facts)).thenReturn(
+        when(aiService.explain(userId, false, "forecast_summary", facts)).thenReturn(
                 new AiService.ExplainOutcome(
                         List.of("문장1", "문장2", "문장3", "문장4"),
                         "standard", "finance", false, true, true, List.of(), null));
 
         ApiResponse<ExplainResponse> response =
-                controller().explain(userId, new ExplainRequest("forecast_summary", facts));
+                controller().explain(principal(),  new ExplainRequest("forecast_summary", facts));
 
         ExplainResponse.Explanation explanation = response.data().explanation();
         assertThat(explanation.sentences()).hasSize(4);
@@ -61,12 +67,12 @@ class AiControllerTest {
     @Test
     void explain_검증_실패해도_예외_없이_fallback_true를_반환한다() {
         Map<String, Object> facts = Map.of("amount", 100000.0);
-        when(aiService.explain(userId, "profile_fit", facts)).thenReturn(
+        when(aiService.explain(userId, false, "profile_fit", facts)).thenReturn(
                 new AiService.ExplainOutcome(AiService.FALLBACK_SENTENCES, "simple", "plain", true,
                         null, null, List.of(), AiService.FallbackReason.PROVIDER_ERROR));
 
         ApiResponse<ExplainResponse> response =
-                controller().explain(userId, new ExplainRequest("profile_fit", facts));
+                controller().explain(principal(),  new ExplainRequest("profile_fit", facts));
 
         assertThat(response.data().explanation().fallback()).isTrue();
         assertThat(response.data().explanation().sentences()).isEqualTo(AiService.FALLBACK_SENTENCES);
@@ -79,12 +85,12 @@ class AiControllerTest {
     @Test
     void explain_금지_표현_폴백은_검출된_표현을_그대로_내보낸다() {
         Map<String, Object> facts = Map.of("amount", 100000.0);
-        when(aiService.explain(userId, "profile_fit", facts)).thenReturn(
+        when(aiService.explain(userId, false, "profile_fit", facts)).thenReturn(
                 new AiService.ExplainOutcome(AiService.FALLBACK_SENTENCES, "simple", "plain", true,
                         null, null, List.of("반드시"), AiService.FallbackReason.BLOCKED_PHRASES));
 
         ApiResponse<ExplainResponse> response =
-                controller().explain(userId, new ExplainRequest("profile_fit", facts));
+                controller().explain(principal(),  new ExplainRequest("profile_fit", facts));
 
         assertThat(response.data().verification().fallbackReason()).isEqualTo("blocked_phrases");
         assertThat(response.data().verification().blockedPhrases()).containsExactly("반드시");
@@ -93,12 +99,12 @@ class AiControllerTest {
     @Test
     void explain_facts에_regime이_있으면_meta_regime에_반영한다() {
         Map<String, Object> facts = Map.of("amount", 100000.0, "regime", "elevated");
-        when(aiService.explain(userId, "profile_fit", facts)).thenReturn(
+        when(aiService.explain(userId, false, "profile_fit", facts)).thenReturn(
                 new AiService.ExplainOutcome(
                         List.of("문장"), "simple", "plain", false, true, true, List.of(), null));
 
         ApiResponse<ExplainResponse> response =
-                controller().explain(userId, new ExplainRequest("profile_fit", facts));
+                controller().explain(principal(),  new ExplainRequest("profile_fit", facts));
 
         assertThat(response.meta().regime()).isEqualTo("elevated");
     }
@@ -106,12 +112,12 @@ class AiControllerTest {
     @Test
     void explain_facts의_regime이_blank이면_meta_regime은_null이다() {
         Map<String, Object> facts = Map.of("amount", 100000.0, "regime", "   ");
-        when(aiService.explain(userId, "profile_fit", facts)).thenReturn(
+        when(aiService.explain(userId, false, "profile_fit", facts)).thenReturn(
                 new AiService.ExplainOutcome(
                         List.of("문장"), "simple", "plain", false, true, true, List.of(), null));
 
         ApiResponse<ExplainResponse> response =
-                controller().explain(userId, new ExplainRequest("profile_fit", facts));
+                controller().explain(principal(),  new ExplainRequest("profile_fit", facts));
 
         assertThat(response.meta().regime()).isNull();
     }
@@ -119,19 +125,19 @@ class AiControllerTest {
     @Test
     void explain_facts에_regime이_없으면_meta_regime은_null이다() {
         Map<String, Object> facts = Map.of("amount", 100000.0);
-        when(aiService.explain(userId, "profile_fit", facts)).thenReturn(
+        when(aiService.explain(userId, false, "profile_fit", facts)).thenReturn(
                 new AiService.ExplainOutcome(
                         List.of("문장"), "simple", "plain", false, true, true, List.of(), null));
 
         ApiResponse<ExplainResponse> response =
-                controller().explain(userId, new ExplainRequest("profile_fit", facts));
+                controller().explain(principal(),  new ExplainRequest("profile_fit", facts));
 
         assertThat(response.meta().regime()).isNull();
     }
 
     @Test
     void explain_request가_null이면_InvalidRequestException을_던진다() {
-        assertThatThrownBy(() -> controller().explain(userId, null))
+        assertThatThrownBy(() -> controller().explain(principal(),  null))
                 .isInstanceOf(InvalidRequestException.class)
                 .hasMessageContaining("요청 본문");
     }
@@ -140,7 +146,7 @@ class AiControllerTest {
     void explain_surface가_null이면_InvalidRequestException을_던진다() {
         ExplainRequest request = new ExplainRequest(null, Map.of("amount", 100.0));
 
-        assertThatThrownBy(() -> controller().explain(userId, request))
+        assertThatThrownBy(() -> controller().explain(principal(),  request))
                 .isInstanceOf(InvalidRequestException.class)
                 .hasMessageContaining("surface");
     }
@@ -149,7 +155,7 @@ class AiControllerTest {
     void explain_surface가_blank이면_InvalidRequestException을_던진다() {
         ExplainRequest request = new ExplainRequest("   ", Map.of("amount", 100.0));
 
-        assertThatThrownBy(() -> controller().explain(userId, request))
+        assertThatThrownBy(() -> controller().explain(principal(),  request))
                 .isInstanceOf(InvalidRequestException.class)
                 .hasMessageContaining("surface");
     }
@@ -158,7 +164,7 @@ class AiControllerTest {
     void explain_facts가_null이면_InvalidRequestException을_던진다() {
         ExplainRequest request = new ExplainRequest("profile_fit", null);
 
-        assertThatThrownBy(() -> controller().explain(userId, request))
+        assertThatThrownBy(() -> controller().explain(principal(),  request))
                 .isInstanceOf(InvalidRequestException.class)
                 .hasMessageContaining("facts");
     }
@@ -167,7 +173,7 @@ class AiControllerTest {
     void explain_facts가_empty이면_InvalidRequestException을_던진다() {
         ExplainRequest request = new ExplainRequest("profile_fit", Map.of());
 
-        assertThatThrownBy(() -> controller().explain(userId, request))
+        assertThatThrownBy(() -> controller().explain(principal(),  request))
                 .isInstanceOf(InvalidRequestException.class)
                 .hasMessageContaining("facts");
     }

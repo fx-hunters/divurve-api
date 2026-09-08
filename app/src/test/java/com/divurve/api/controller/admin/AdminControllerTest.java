@@ -9,6 +9,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.divurve.api.dto.admin.AdminCurrencyResponse;
+import com.divurve.api.dto.admin.AdminAiCallLogResponse;
+import com.divurve.api.dto.admin.AdminAiUsageSummaryResponse;
 import com.divurve.api.dto.admin.AdminExtractPreviewRequest;
 import com.divurve.api.dto.admin.AdminExtractPreviewResponse;
 import com.divurve.api.dto.admin.AdminFxRateBackfillResponse;
@@ -68,6 +70,7 @@ class AdminControllerTest {
     @Mock private FxRateGapService fxRateGapService;
     @Mock private MacroRefreshService macroRefreshService;
     @Mock private EconEventExtractPreviewService econEventExtractPreviewService;
+    @Mock private com.divurve.domain.ai.AiCallLogQueryService aiCallLogQueryService;
 
     private static AdminUserQueryService.UserSummary summary() {
         return new AdminUserQueryService.UserSummary(
@@ -417,7 +420,7 @@ class AdminControllerTest {
                             null));
 
             ApiResponse<AdminExtractPreviewResponse> response =
-                    new AdminAiController(econEventExtractPreviewService).extractPreview(
+                    new AdminAiController(econEventExtractPreviewService, aiCallLogQueryService).extractPreview(
                             ADMIN_ID, new AdminExtractPreviewRequest("https://x", "원문"));
 
             assertThat(response.meta()).isNotNull();
@@ -446,12 +449,76 @@ class AdminControllerTest {
                             "AiResponseFormatException: 응답이 JSON 배열이 아니다"));
 
             ApiResponse<AdminExtractPreviewResponse> response =
-                    new AdminAiController(econEventExtractPreviewService).extractPreview(
+                    new AdminAiController(econEventExtractPreviewService, aiCallLogQueryService).extractPreview(
                             ADMIN_ID, new AdminExtractPreviewRequest(null, "원문"));
 
             assertThat(response.data().count()).isZero();
             assertThat(response.data().failureReason())
                     .isEqualTo("AiResponseFormatException: 응답이 JSON 배열이 아니다");
+        }
+
+        @Test
+        @DisplayName("호출 로그 목록은 필터를 그대로 넘기고 페이지 정보를 담는다 (이슈 #143)")
+        void calls_PassesFiltersThrough() {
+            java.time.Instant from = java.time.Instant.parse("2026-09-01T00:00:00Z");
+            java.time.Instant to = java.time.Instant.parse("2026-09-08T00:00:00Z");
+            when(aiCallLogQueryService.list(
+                    new com.divurve.domain.ai.AiCallLogQueryService.CallLogFilter(
+                            from, to, "narrate", "forecast_summary", "fallback", true),
+                    1, 20))
+                    .thenReturn(new com.divurve.domain.ai.AiCallLogQueryService.CallLogPage(
+                            List.of(new com.divurve.domain.ai.AiCallLogQueryService.CallLogView(
+                                    java.util.UUID.randomUUID(), from, null, true, "narrate",
+                                    "forecast_summary", "claude-opus-5", 120, 45, 7L, 3L,
+                                    "fallback", "provider_error", 4321, "IOException: timeout")),
+                            1, 20, 1, 1));
+
+            ApiResponse<AdminAiCallLogResponse> response =
+                    new AdminAiController(econEventExtractPreviewService, aiCallLogQueryService)
+                            .calls(ADMIN_ID, from, to, "narrate", "forecast_summary", "fallback",
+                                    true, 1, 20);
+
+            assertThat(response.meta()).isNotNull();
+            assertThat(response.data().page()).isEqualTo(1);
+            assertThat(response.data().size()).isEqualTo(20);
+            assertThat(response.data().totalElements()).isEqualTo(1);
+            AdminAiCallLogResponse.AdminAiCall call = response.data().items().get(0);
+            assertThat(call.purpose()).isEqualTo("narrate");
+            assertThat(call.outcome()).isEqualTo("fallback");
+            assertThat(call.fallbackReason()).isEqualTo("provider_error");
+            assertThat(call.model()).isEqualTo("claude-opus-5");
+            assertThat(call.inputTokens()).isEqualTo(120);
+            assertThat(call.cacheReadInputTokens()).isEqualTo(7);
+            assertThat(call.isDemo()).isTrue();
+            assertThat(call.userId())
+                    .as("사용자가 삭제돼도 비용 이력은 남는다 — 참조만 비어 있다")
+                    .isNull();
+        }
+
+        @Test
+        @DisplayName("사용량 집계는 일자·용도·모델별 칸을 그대로 내보낸다 — 관리자가 실제로 보는 화면이다")
+        void usageSummary_ExposesBuckets() {
+            when(aiCallLogQueryService.summarize(null, null)).thenReturn(List.of(
+                    new com.divurve.domain.ai.AiCallLogQueryService.UsageBucket(
+                            java.time.LocalDate.of(2026, 9, 8), "narrate", "claude-opus-5",
+                            3, 300, 120),
+                    new com.divurve.domain.ai.AiCallLogQueryService.UsageBucket(
+                            java.time.LocalDate.of(2026, 9, 7), "narrate", null, 5, 0, 0)));
+
+            ApiResponse<AdminAiUsageSummaryResponse> response =
+                    new AdminAiController(econEventExtractPreviewService, aiCallLogQueryService)
+                            .usageSummary(ADMIN_ID, null, null);
+
+            assertThat(response.data().buckets()).hasSize(2);
+            AdminAiUsageSummaryResponse.AdminAiUsageBucket first =
+                    response.data().buckets().get(0);
+            assertThat(first.day()).isEqualTo(java.time.LocalDate.of(2026, 9, 8));
+            assertThat(first.calls()).isEqualTo(3);
+            assertThat(first.inputTokens()).isEqualTo(300);
+            assertThat(first.outputTokens()).isEqualTo(120);
+            assertThat(response.data().buckets().get(1).model())
+                    .as("LLM 을 부르지 않은 요청만 있었던 칸은 모델이 없고 토큰이 0 이다")
+                    .isNull();
         }
     }
 }
