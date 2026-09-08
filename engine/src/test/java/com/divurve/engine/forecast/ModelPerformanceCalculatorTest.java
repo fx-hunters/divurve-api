@@ -14,9 +14,9 @@ import org.junit.jupiter.api.Test;
 /**
  * {@link ModelPerformanceCalculator} 검증 (명세 v2 §5.8).
  *
- * <p>이전 테스트는 {@code (forecasts, actuals)} 2인자 시그니처를 검증했고, 그 구현이 첫 시점을
- * 항상 미적중으로 세는 편향을 갖고 있었다. 기준값을 인자로 받는 새 계약을 여기서 다시 못박는다 —
- * <b>완벽 예측 n건은 적중률 1.0</b> 이어야 한다.
+ * <p>방향 적중률({@code calculateHitRate})은 이슈 #90 에서 제거했다 — 이 서비스의 기준 모델은
+ * 드리프트 0 이라 점예측이 항상 기준값과 같고, 그 결과 방향 적중률이 모든 입력에서 예외 없이 0 이
+ * 되는 구조적 결함이 있었다. 관련 테스트도 함께 제거했다.
  */
 @DisplayName("ModelPerformanceCalculator")
 class ModelPerformanceCalculatorTest {
@@ -28,70 +28,6 @@ class ModelPerformanceCalculatorTest {
                 ModelPerformanceCalculator.class.getDeclaredConstructor();
         constructor.setAccessible(true);
         assertNotNull(constructor.newInstance());
-    }
-
-    @Nested
-    @DisplayName("방향 적중률")
-    class HitRate {
-
-        @Test
-        @DisplayName("완벽 예측 3건은 1.0 — i=0 편향이 없다")
-        void perfectForecastIsOne() {
-            List<Double> base = List.of(1000.0, 1000.0, 1000.0);
-            List<Double> forecast = List.of(1010.0, 990.0, 1000.0);
-            List<Double> actual = List.of(1020.0, 980.0, 1000.0);
-
-            assertEquals(1.0, ModelPerformanceCalculator.calculateHitRate(base, forecast, actual));
-        }
-
-        @Test
-        @DisplayName("방향이 어긋나면 미적중")
-        void wrongDirection() {
-            List<Double> base = List.of(1000.0, 1000.0);
-            List<Double> forecast = List.of(1010.0, 1010.0);
-            List<Double> actual = List.of(1020.0, 980.0);
-
-            assertEquals(0.5, ModelPerformanceCalculator.calculateHitRate(base, forecast, actual));
-        }
-
-        @Test
-        @DisplayName("보합 예측은 실제도 보합일 때만 적중")
-        void flatForecast() {
-            List<Double> base = List.of(1000.0, 1000.0);
-            List<Double> forecast = List.of(1000.0, 1000.0);
-            List<Double> actual = List.of(1000.0, 1001.0);
-
-            assertEquals(0.5, ModelPerformanceCalculator.calculateHitRate(base, forecast, actual));
-        }
-
-        @Test
-        @DisplayName("빈 입력은 0")
-        void empty() {
-            assertEquals(0.0, ModelPerformanceCalculator.calculateHitRate(List.of(), List.of(), List.of()));
-        }
-
-        @Test
-        @DisplayName("null 입력은 NPE")
-        void nulls() {
-            List<Double> ok = List.of(1.0);
-            assertThrows(NullPointerException.class,
-                    () -> ModelPerformanceCalculator.calculateHitRate(null, ok, ok));
-            assertThrows(NullPointerException.class,
-                    () -> ModelPerformanceCalculator.calculateHitRate(ok, null, ok));
-            assertThrows(NullPointerException.class,
-                    () -> ModelPerformanceCalculator.calculateHitRate(ok, ok, null));
-        }
-
-        @Test
-        @DisplayName("크기가 다르면 예외")
-        void sizeMismatch() {
-            List<Double> one = List.of(1.0);
-            List<Double> two = List.of(1.0, 2.0);
-            assertThrows(IllegalArgumentException.class,
-                    () -> ModelPerformanceCalculator.calculateHitRate(one, two, two));
-            assertThrows(IllegalArgumentException.class,
-                    () -> ModelPerformanceCalculator.calculateHitRate(two, two, one));
-        }
     }
 
     @Nested
@@ -240,7 +176,7 @@ class ModelPerformanceCalculatorTest {
     class RandomWalk {
 
         @Test
-        @DisplayName("직전 실측값을 예측으로 쓰므로 방향 적중률은 실제가 보합일 때만 오른다")
+        @DisplayName("직전 실측값을 예측으로 써서 상대 MAE 를 낸다")
         void benchmark() {
             List<Double> base = List.of(1000.0, 1000.0);
             List<Double> actual = List.of(1000.0, 1020.0);
@@ -248,7 +184,6 @@ class ModelPerformanceCalculatorTest {
             ModelPerformanceCalculator.RandomWalkMetrics metrics =
                     ModelPerformanceCalculator.calculateRandomWalkBenchmark(base, actual);
 
-            assertEquals(0.5, metrics.hitRate());
             // |1000-1000|/1000 = 0, |1000-1020|/1020 = 0.019607...
             assertEquals(0.0098039, metrics.mae(), 1e-6);
         }
