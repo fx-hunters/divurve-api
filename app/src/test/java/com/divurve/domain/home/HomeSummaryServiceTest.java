@@ -100,6 +100,15 @@ class HomeSummaryServiceTest {
                 84_000L, false);
     }
 
+    /** 원화 자산만 있고 외화는 없는 사용자 (이슈 #166 — KRW 를 보유 통화로 세는지). */
+    private PortfolioSnapshot portfolioKrwOnly() {
+        return new PortfolioSnapshot(
+                10_000_000L, 10_000_000L, 0L, 0.0, Map.of(), Map.of(),
+                new ConcentrationView(null, null, null, null, "unknown", null),
+                new SensitivityView(0L, Map.of()),
+                null, false);
+    }
+
     private PortfolioSnapshot portfolioWithoutFx() {
         return new PortfolioSnapshot(
                 0L, 0L, 0L, 0.0, Map.of(), Map.of(),
@@ -283,8 +292,8 @@ class HomeSummaryServiceTest {
         when(riskProfileService.getRiskProfile(userId)).thenReturn(riskProfileNotMeasured());
         when(forecastService.getForecast(userId, "USDKRW", ForecastService.DEFAULT_HORIZON_DAYS))
                 .thenReturn(forecastView());
-        // 이슈 #162 — 창을 쿼리로 내렸으므로 서비스는 받아온 목록을 다시 거르지 않는다.
-        // 14 일이라는 창 자체를 넘기는지가 검증 대상이다.
+        // 이슈 #162 — 창을 쿼리로 내렸으므로 14 일이라는 창 자체를 넘기는지가 검증 대상이다.
+        // 이 사용자는 보유 자산이 없어(portfolioWithoutFx) 이슈 #166 필터가 걸리지 않는다.
         when(forecastService.getEvents(14)).thenReturn(List.of(
                 new ForecastService.EconomicEventView(TODAY.plusDays(3), "FOMC", "USD", "High")));
 
@@ -295,6 +304,80 @@ class HomeSummaryServiceTest {
                 ForecastService.EconomicEventView::title).containsExactly("FOMC");
         assertThat(view.regime()).isEqualTo("stress");
         verify(forecastService).getEvents(14);
+    }
+
+    /**
+     * 이슈 #166 — 이 화면은 시장 브리핑이 아니라 "개인 금융 상태" 다(화면 v2 §11).
+     * 보유하지 않은 통화(JPY)의 일정은 내 금융 상태가 아니다.
+     *
+     * <p>{@code portfolioWithFx} 는 USD 외화와 원화 자산을 함께 든 사용자다 — 금통위가 남는 것이
+     * 정상이며, 원화 자산을 보유로 세지 않으면 이 단정이 깨진다.
+     */
+    @Test
+    void getSummary_attention은_보유_통화의_일정만_담는다() {
+        stubAttention(portfolioWithFx(), List.of(
+                new ForecastService.EconomicEventView(TODAY.plusDays(3), "FOMC", "USD", "High"),
+                new ForecastService.EconomicEventView(TODAY.plusDays(5), "BOJ", "JPY", "High"),
+                new ForecastService.EconomicEventView(TODAY.plusDays(7), "금통위", "KRW", "Medium")));
+
+        HomeSummaryService.HomeSummaryView view = service.getSummary(userId);
+
+        assertThat(view.attention().upcomingEvents())
+                .extracting(ForecastService.EconomicEventView::title)
+                .containsExactly("FOMC", "금통위");
+    }
+
+    @Test
+    void getSummary_attention은_귀속_통화가_없는_일정을_항상_담는다() {
+        stubAttention(portfolioWithFx(), List.of(
+                new ForecastService.EconomicEventView(TODAY.plusDays(3), "BOJ", "JPY", "High"),
+                new ForecastService.EconomicEventView(TODAY.plusDays(5), "G20", null, "Low")));
+
+        HomeSummaryService.HomeSummaryView view = service.getSummary(userId);
+
+        assertThat(view.attention().upcomingEvents())
+                .extracting(ForecastService.EconomicEventView::title)
+                .containsExactly("G20");
+    }
+
+    /** 거를 기준이 없으면 거르지 않는다 — 자산 미등록 사용자에게 "주의할 것 없음" 은 사실이 아니다. */
+    @Test
+    void getSummary_attention은_보유_자산이_없으면_거르지_않는다() {
+        stubAttention(portfolioWithoutFx(), List.of(
+                new ForecastService.EconomicEventView(TODAY.plusDays(3), "FOMC", "USD", "High"),
+                new ForecastService.EconomicEventView(TODAY.plusDays(5), "BOJ", "JPY", "High")));
+
+        HomeSummaryService.HomeSummaryView view = service.getSummary(userId);
+
+        assertThat(view.attention().upcomingEvents())
+                .extracting(ForecastService.EconomicEventView::title)
+                .containsExactly("FOMC", "BOJ");
+    }
+
+    /** 원화 자산도 보유다 — 한국은행 금통위는 원화 보유자에게 유의미하다. */
+    @Test
+    void getSummary_attention은_원화_자산만_있어도_KRW_일정을_담는다() {
+        stubAttention(portfolioKrwOnly(), List.of(
+                new ForecastService.EconomicEventView(TODAY.plusDays(3), "금통위", "KRW", "Medium"),
+                new ForecastService.EconomicEventView(TODAY.plusDays(5), "BOJ", "JPY", "High")));
+
+        HomeSummaryService.HomeSummaryView view = service.getSummary(userId);
+
+        assertThat(view.attention().upcomingEvents())
+                .extracting(ForecastService.EconomicEventView::title)
+                .containsExactly("금통위");
+    }
+
+    /** 이슈 #166 테스트 공통 스텁 — 관심사는 attention 뿐이라 나머지는 최소로 채운다. */
+    private void stubAttention(PortfolioSnapshot portfolio,
+            List<ForecastService.EconomicEventView> events) {
+        stubUserExists();
+        when(marketRegimeService.getRegime()).thenReturn(regimeView("normal", "normal"));
+        when(xrayService.getPortfolio(userId)).thenReturn(portfolio);
+        when(riskProfileService.getRiskProfile(userId)).thenReturn(riskProfileNotMeasured());
+        when(forecastService.getForecast(userId, "USDKRW", ForecastService.DEFAULT_HORIZON_DAYS))
+                .thenReturn(forecastView());
+        when(forecastService.getEvents(14)).thenReturn(events);
     }
 
     /**
