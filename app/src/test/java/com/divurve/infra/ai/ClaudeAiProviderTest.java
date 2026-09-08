@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.divurve.domain.ai.AiService;
 import com.divurve.domain.port.AiProvider;
+import com.divurve.domain.port.TokenUsage;
 import com.divurve.domain.port.AiProvider.ExplainContext;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.ArrayList;
@@ -47,7 +48,7 @@ class ClaudeAiProviderTest {
     @Test
     void forecast_summary_는_실_API_응답을_문장으로_돌려준다() {
         messageClient.response = new ClaudeMessageClient.Completion(
-                body("첫째.", "둘째.", "셋째.", "넷째."), 100, 50);
+body("첫째.", "둘째.", "셋째.", "넷째."), TokenUsage.of(100, 50));
 
         AiProvider.ExplainResult result = sut.explain(context(AiService.SURFACE_FORECAST_SUMMARY));
 
@@ -68,7 +69,8 @@ class ClaudeAiProviderTest {
 
     @Test
     void 문장_수가_4가_아니면_형식_예외를_던진다() {
-        messageClient.response = new ClaudeMessageClient.Completion(body("하나뿐."), 10, 5);
+        messageClient.response = new ClaudeMessageClient.Completion(
+body("하나뿐."), TokenUsage.of(10, 5));
 
         assertThatThrownBy(() -> sut.explain(context(AiService.SURFACE_FORECAST_SUMMARY)))
                 .isInstanceOf(AiResponseFormatException.class)
@@ -126,7 +128,7 @@ class ClaudeAiProviderTest {
         @Override
         public ExplainResult explain(ExplainContext context) {
             calls++;
-            return new ExplainResult(List.of("템플릿 문장."));
+            return ExplainResult.withoutLlm(List.of("템플릿 문장."));
         }
     }
 }

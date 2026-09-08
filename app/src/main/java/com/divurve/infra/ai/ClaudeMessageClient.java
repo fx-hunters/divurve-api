@@ -1,5 +1,7 @@
 package com.divurve.infra.ai;
 
+import com.divurve.domain.port.TokenUsage;
+
 /**
  * Claude Messages API 호출 시임 (이슈 #73).
  *
@@ -25,10 +27,13 @@ public interface ClaudeMessageClient {
     /**
      * 호출 결과.
      *
-     * @param text         응답 텍스트 블록을 이어붙인 본문
-     * @param inputTokens  입력 토큰 수 (감사 기록용 메타)
-     * @param outputTokens 출력 토큰 수 (감사 기록용 메타)
+     * <p>사용량을 {@code long} 두 개가 아니라 {@link TokenUsage} 로 드는 이유(이슈 #143) —
+     * 이 값은 도메인까지 그대로 올라가 {@code ai_call_logs} 에 기록된다. 중간에서 필드를 풀었다
+     * 다시 묶으면 프롬프트 캐시 토큰처럼 나중에 추가되는 항목이 조용히 빠진다.
+     *
+     * @param text  응답 텍스트 블록을 이어붙인 본문
+     * @param usage 이 호출이 쓴 토큰
      */
-    record Completion(String text, long inputTokens, long outputTokens) {
+    record Completion(String text, TokenUsage usage) {
     }
 }

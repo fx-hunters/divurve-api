@@ -1,7 +1,9 @@
 package com.divurve.domain.ai;
 
 import com.divurve.common.architecture.UseCase;
+import com.divurve.domain.ai.entity.AiCallLog;
 import com.divurve.domain.port.AiProvider;
+import com.divurve.domain.port.TokenUsage;
 import com.divurve.domain.settings.SettingsView;
 import com.divurve.domain.settings.UserSettingsService;
 import java.time.Clock;
@@ -87,6 +89,7 @@ public class AiService {
             "잠시 후 다시 시도하면 설명이 정상적으로 표시될 수 있습니다.");
 
     private final AiProvider aiProvider;
+    private final AiCallLogRecorder aiCallLogRecorder;
     private final AiResponseValidator numericValidator;
     private final NarrativeFilter narrativeFilter;
     private final UserSettingsService userSettingsService;
@@ -96,6 +99,7 @@ public class AiService {
 
     public AiService(
             AiProvider aiProvider,
+            AiCallLogRecorder aiCallLogRecorder,
             AiResponseValidator numericValidator,
             NarrativeFilter narrativeFilter,
             UserSettingsService userSettingsService,
@@ -104,6 +108,7 @@ public class AiService {
             @Value("${app.external.anthropic.total-budget:" + DEFAULT_TOTAL_BUDGET + "}")
             Duration totalBudget) {
         this.aiProvider = Objects.requireNonNull(aiProvider, "aiProvider");
+        this.aiCallLogRecorder = Objects.requireNonNull(aiCallLogRecorder, "aiCallLogRecorder");
         this.numericValidator = Objects.requireNonNull(numericValidator, "numericValidator");
         this.narrativeFilter = Objects.requireNonNull(narrativeFilter, "narrativeFilter");
         this.userSettingsService = Objects.requireNonNull(userSettingsService, "userSettingsService");
@@ -115,13 +120,16 @@ public class AiService {
     /**
      * 엔진 결과를 사용자의 설명 선호에 맞춰 서술한다.
      *
-     * @param userId  사용자 ID — {@code explain_level}·{@code explain_domain} 조회에만 쓴다
+     * @param userId  사용자 ID — {@code explain_level}·{@code explain_domain} 조회와 호출 기록에 쓴다
+     * @param demo    데모 세션의 요청인지 (이슈 #143) — 데모 트래픽 비중이 비용 분석의 핵심 축이다.
+     *                토큰의 {@code is_demo} 클레임이 유일한 근거이므로 컨트롤러가 넘겨준다
      * @param surface 서술 대상 화면 (예: {@code forecast_summary})
      * @param facts   엔진이 계산한 검증된 사실. AI 의 유일한 그라운딩 소스다(FR-AI-02)
      * @return 서술 결과 — 검증 실패해도 {@code null} 을 반환하지 않는다(H1)
      */
     @Transactional(readOnly = true)
-    public ExplainOutcome explain(UUID userId, String surface, Map<String, Object> facts) {
+    public ExplainOutcome explain(
+            UUID userId, boolean demo, String surface, Map<String, Object> facts) {
         Objects.requireNonNull(userId, "userId");
         Objects.requireNonNull(surface, "surface");
         Objects.requireNonNull(facts, "facts");
@@ -130,7 +138,13 @@ public class AiService {
         String explainLevel = settings.explainLevel();
         String explainDomain = settings.explainDomain();
 
-        Instant deadline = clock.instant().plus(totalBudget);
+        Instant startedAt = clock.instant();
+        Instant deadline = startedAt.plus(totalBudget);
+
+        // 호출 기록용 누적값 (이슈 #143). 재시도가 있으므로 사용량은 합산하고, 모델은 마지막으로
+        // 실제 호출한 값을 남긴다 — 재시도 중 설정이 바뀌지 않으므로 둘은 같다.
+        TokenUsage totalUsage = TokenUsage.NONE;
+        String model = null;
 
         // 검증 단계까지 도달한 마지막 시도의 측정값. 한 번도 도달하지 못했으면 null 로 남겨
         // "측정되지 않았다" 를 그대로 응답에 싣는다(이슈 #122) — 폴백에 true 를 채워 넣지 않는다.
@@ -138,6 +152,7 @@ public class AiService {
         Boolean regimeDisclosed = null;
         List<String> blockedPhrases = List.of();
         FallbackReason fallbackReason = null;
+        RuntimeException providerError = null;
 
         for (int attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
             if (attempt > 0 && !clock.instant().isBefore(deadline)) {
@@ -149,9 +164,13 @@ public class AiService {
 
             List<String> sentences;
             try {
-                sentences = aiProvider.explain(
-                        new AiProvider.ExplainContext(surface, facts, explainLevel, explainDomain))
-                        .sentences();
+                AiProvider.ExplainResult result = aiProvider.explain(
+                        new AiProvider.ExplainContext(surface, facts, explainLevel, explainDomain));
+                sentences = result.sentences();
+                totalUsage = totalUsage.plus(result.usage());
+                if (result.model() != null) {
+                    model = result.model();
+                }
             } catch (RuntimeException e) {
                 // 타임아웃·429·5xx·응답 형식 위반. 재시도해도 같은 이유로 실패할 가능성이 크고,
                 // 남은 예산을 쓰는 동안 사용자는 계속 기다린다 — 즉시 폴백한다(FR-AI-06).
@@ -161,6 +180,7 @@ public class AiService {
                 // 실패인지 구분할 수 없다 — 대응이 완전히 다른데도.
                 log.warn("AI 서술 호출 실패 — 폴백한다. surface={} attempt={}", surface, attempt, e);
                 fallbackReason = FallbackReason.PROVIDER_ERROR;
+                providerError = e;
                 break;
             }
 
@@ -183,6 +203,8 @@ public class AiService {
             numericMatch = numericValidator.verify(sentences, facts);
             regimeDisclosed = regimeDisclosureCheck.verify(sentences, facts);
             if (numericMatch && regimeDisclosed) {
+                record(startedAt, userId, demo, surface, model, totalUsage,
+                        AiCallOutcome.SUCCESS, null, null);
                 return new ExplainOutcome(
                         sentences, explainLevel, explainDomain, false, true, true, List.of(), null);
             }
@@ -194,8 +216,51 @@ public class AiService {
         }
 
         // 폐기하고 고정 템플릿으로 폴백한다. 200 을 유지한다(FR-AI-06, NFR-AI-03).
+        //
+        // 폴백도 기록한다(이슈 #143) — 토큰은 이미 소모됐을 수 있고(검증 실패 경로), 실패가 어느
+        // 사유로 몇 번 일어났는지가 비용 판단의 절반이다. 남기지 않으면 관리자 화면에서 호출량이
+        // 줄어든 것이 "캐시가 잘 듣는다" 인지 "장애로 폴백 중" 인지 구분되지 않는다.
+        record(startedAt, userId, demo, surface, model, totalUsage, AiCallOutcome.FALLBACK,
+                fallbackReason, AiCallLogRecorder.summarize(providerError));
+
         return new ExplainOutcome(FALLBACK_SENTENCES, explainLevel, explainDomain, true,
                 numericMatch, regimeDisclosed, blockedPhrases, fallbackReason);
+    }
+
+    /**
+     * 호출 한 건을 {@code ai_call_logs} 에 남긴다 (이슈 #143).
+     *
+     * <p><b>여기가 기록 지점인 이유</b> — 어댑터가 아니라 이 유스케이스다. 폴백은 어댑터를 아예
+     * 타지 않으므로 어댑터에 기록을 두면 정확히 그 경로가 사라진다. 그리고 ArchUnit 이
+     * {@code @ExternalAdapter} → {@code @PersistenceAdapter} 를 막는다(CLAUDE.md 4장).
+     *
+     * <p>{@code model} 이 {@code null} 이면 LLM 을 부르지 않은 요청이다 — 규약이 확정된 화면
+     * ({@code forecast_summary}) 밖은 템플릿으로 응답하고, {@code ANTHROPIC_ENABLED} 가 꺼진 기본
+     * 설정에서는 모든 서술이 그렇다. 그 행도 남긴다: 요청은 있었고 비용은 0 이었다는 사실이며,
+     * 이슈 #140 의 사용자별 쿼터는 LLM 호출 수가 아니라 <b>요청 수</b>를 세야 한다.
+     */
+    private void record(
+            Instant startedAt,
+            UUID userId,
+            boolean demo,
+            String surface,
+            String model,
+            TokenUsage usage,
+            AiCallOutcome outcome,
+            FallbackReason fallbackReason,
+            String errorSummary) {
+        int latencyMs = (int) Duration.between(startedAt, clock.instant()).toMillis();
+        aiCallLogRecorder.record(AiCallLog.narrate(
+                startedAt,
+                userId,
+                demo,
+                surface,
+                model,
+                usage,
+                outcome,
+                fallbackReason == null ? null : fallbackReason.code(),
+                latencyMs,
+                errorSummary));
     }
 
     /**

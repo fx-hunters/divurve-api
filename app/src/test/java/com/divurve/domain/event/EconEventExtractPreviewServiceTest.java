@@ -10,6 +10,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.divurve.common.exception.InvalidRequestException;
+import com.divurve.domain.ai.AiCallLogRecorder;
 import com.divurve.domain.port.EconEventExtractor;
 import java.net.SocketTimeoutException;
 import java.time.Clock;
@@ -39,6 +40,7 @@ class EconEventExtractPreviewServiceTest {
     private EconEventExtractor extractor;
     private EconEventValidator validator;
     private EconEventRepository repository;
+    private AiCallLogRecorder aiCallLogRecorder;
     private EconEventExtractPreviewService service;
 
     @BeforeEach
@@ -46,7 +48,8 @@ class EconEventExtractPreviewServiceTest {
         extractor = mock(EconEventExtractor.class);
         validator = mock(EconEventValidator.class);
         repository = mock(EconEventRepository.class);
-        service = new EconEventExtractPreviewService(extractor, validator, CLOCK);
+        aiCallLogRecorder = mock(AiCallLogRecorder.class);
+        service = new EconEventExtractPreviewService(extractor, validator, aiCallLogRecorder, CLOCK);
     }
 
     private static EconEventExtractor.ExtractedEvent candidate(String date, String region) {
@@ -56,7 +59,7 @@ class EconEventExtractPreviewServiceTest {
     @Test
     @DisplayName("추출 후보와 검증 결과를 함께 돌려주고 저장하지 않는다")
     void preview_ReturnsCandidatesWithoutSaving() {
-        when(extractor.extract(any())).thenReturn(List.of(candidate("2026-09-18", "US")));
+        when(extractor.extract(any())).thenReturn(EconEventExtractor.ExtractOutcome.withoutLlm(List.of(candidate("2026-09-18", "US"))));
         when(validator.validate(any(), anyString())).thenReturn(new EconEventValidator.Result(
                 true,
                 new EconEventValidator.ValidEvent(
@@ -81,7 +84,7 @@ class EconEventExtractPreviewServiceTest {
     @Test
     @DisplayName("원문과 출처를 그대로 추출기에 넘긴다 — 그라운딩 대조의 근거다")
     void preview_PassesArticleThrough() {
-        when(extractor.extract(any())).thenReturn(List.of());
+        when(extractor.extract(any())).thenReturn(EconEventExtractor.ExtractOutcome.withoutLlm(List.of()));
 
         service.preview("https://example.com/a", TEXT);
 
@@ -96,7 +99,7 @@ class EconEventExtractPreviewServiceTest {
     @Test
     @DisplayName("거부된 후보도 사유와 함께 돌려준다 — 이 화면의 주된 산출물이다")
     void preview_IncludesRejectedCandidates() {
-        when(extractor.extract(any())).thenReturn(List.of(candidate("어제", "MARS")));
+        when(extractor.extract(any())).thenReturn(EconEventExtractor.ExtractOutcome.withoutLlm(List.of(candidate("어제", "MARS"))));
         when(validator.validate(any(), anyString()))
                 .thenReturn(new EconEventValidator.Result(false, null, "허용되지 않는 region: MARS"));
 
@@ -115,12 +118,12 @@ class EconEventExtractPreviewServiceTest {
     void preview_ReportsExtractorImplementation() {
         EconEventExtractor noop = new EconEventExtractor() {
             @Override
-            public List<ExtractedEvent> extract(RawArticle article) {
-                return List.of();
+            public ExtractOutcome extract(RawArticle article) {
+                return ExtractOutcome.withoutLlm(List.of());
             }
         };
         EconEventExtractPreviewService withNoop =
-                new EconEventExtractPreviewService(noop, validator, CLOCK);
+                new EconEventExtractPreviewService(noop, validator, aiCallLogRecorder, CLOCK);
 
         EconEventExtractPreviewService.PreviewResult result = withNoop.preview(null, TEXT);
 
@@ -175,11 +178,13 @@ class EconEventExtractPreviewServiceTest {
     @Test
     @DisplayName("null 의존은 거부한다")
     void nullDependencies_Throw() {
-        assertThatThrownBy(() -> new EconEventExtractPreviewService(null, validator, CLOCK))
+        assertThatThrownBy(() -> new EconEventExtractPreviewService(null, validator, aiCallLogRecorder, CLOCK))
                 .isInstanceOf(NullPointerException.class);
-        assertThatThrownBy(() -> new EconEventExtractPreviewService(extractor, null, CLOCK))
+        assertThatThrownBy(() -> new EconEventExtractPreviewService(extractor, null, aiCallLogRecorder, CLOCK))
                 .isInstanceOf(NullPointerException.class);
-        assertThatThrownBy(() -> new EconEventExtractPreviewService(extractor, validator, null))
+        assertThatThrownBy(() -> new EconEventExtractPreviewService(extractor, validator, null, CLOCK))
+                .isInstanceOf(NullPointerException.class);
+        assertThatThrownBy(() -> new EconEventExtractPreviewService(extractor, validator, aiCallLogRecorder, null))
                 .isInstanceOf(NullPointerException.class);
     }
 }

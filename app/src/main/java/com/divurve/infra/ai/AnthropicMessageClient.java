@@ -5,6 +5,8 @@ import com.anthropic.models.messages.ContentBlock;
 import com.anthropic.models.messages.Message;
 import com.anthropic.models.messages.MessageCreateParams;
 import com.anthropic.models.messages.TextBlock;
+import com.anthropic.models.messages.Usage;
+import com.divurve.domain.port.TokenUsage;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.stream.Collectors;
@@ -49,6 +51,22 @@ public class AnthropicMessageClient implements ClaudeMessageClient {
             .map(TextBlock::text)
             .collect(Collectors.joining("\n"));
 
-        return new Completion(text, message.usage().inputTokens(), message.usage().outputTokens());
+        return new Completion(text, usageOf(message));
+    }
+
+    /**
+     * SDK 사용량을 {@link TokenUsage} 로 옮긴다.
+     *
+     * <p>캐시 토큰 두 항목은 SDK 가 {@code Optional<Long>} 로 준다. 프롬프트 캐싱을 쓰지 않는
+     * 지금은 항상 비어 있으므로 {@code null} 로 남긴다 — 0 으로 채우면 캐싱을 켠 뒤 "캐시를 쓰지
+     * 않았다" 와 "측정되지 않았다" 가 구분되지 않고, 캐싱은 단가가 달라 비용 계산이 어긋난다.
+     */
+    private static TokenUsage usageOf(Message message) {
+        Usage usage = message.usage();
+        return new TokenUsage(
+            usage.inputTokens(),
+            usage.outputTokens(),
+            usage.cacheReadInputTokens().orElse(null),
+            usage.cacheCreationInputTokens().orElse(null));
     }
 }

@@ -44,8 +44,23 @@ public interface AiProvider {
     /**
      * explain 결과 스키마.
      *
+     * <p><b>{@code usage} 가 여기 있는 이유</b>(이슈 #143) — 토큰 사용량은 어댑터가 알고 도메인이
+     * 기록해야 한다. 어댑터가 리포지토리를 직접 부르는 길은 ArchUnit 이 막으므로
+     * ({@code @ExternalAdapter} → {@code @PersistenceAdapter} 금지, CLAUDE.md 4장), 사용량을
+     * 결과에 실어 도메인까지 올려보낸다. 예전에는 어댑터가 {@code log.info} 로 찍고 버렸다.
+     *
+     * <p>{@code model} 도 함께 올린다 — 모델별 단가가 다르므로 기록에 반드시 필요한데, 어떤 모델을
+     * 불렀는지는 어댑터만 안다(설정은 infra 에 있고 도메인은 그것을 읽지 않는다).
+     *
      * @param sentences 서술 문장 목록 (표현 필터·수치 대조 전 원문)
+     * @param model     호출한 모델 ID. LLM 을 부르지 않은 구현(템플릿)은 {@code null}
+     * @param usage     이 호출이 쓴 토큰. LLM 을 부르지 않은 구현(템플릿)은 {@link TokenUsage#NONE}
      */
-    record ExplainResult(List<String> sentences) {
+    record ExplainResult(List<String> sentences, String model, TokenUsage usage) {
+
+        /** LLM 을 부르지 않은 구현이 쓰는 생성자 — 모델도 토큰도 없음을 명시한다. */
+        public static ExplainResult withoutLlm(List<String> sentences) {
+            return new ExplainResult(sentences, null, TokenUsage.NONE);
+        }
     }
 }

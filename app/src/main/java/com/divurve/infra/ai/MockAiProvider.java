@@ -42,7 +42,8 @@ public class MockAiProvider implements AiProvider {
         List<String> sentences = AiService.SURFACE_FORECAST_SUMMARY.equals(context.surface())
                 ? forecastSummarySentences(context)
                 : genericSentences(context);
-        return new ExplainResult(sentences);
+        // 템플릿이므로 LLM 을 부르지 않았다 — 토큰 0 을 명시한다(이슈 #143).
+        return ExplainResult.withoutLlm(sentences);
     }
 
     /**

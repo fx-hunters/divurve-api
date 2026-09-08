@@ -8,12 +8,12 @@ import com.divurve.common.exception.InvalidRequestException;
 import com.divurve.common.response.ApiResponse;
 import com.divurve.common.response.Meta;
 import com.divurve.domain.ai.AiService;
+import com.divurve.domain.port.AuthPrincipal;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import java.time.Instant;
 import java.util.Objects;
-import java.util.UUID;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -54,10 +54,15 @@ public class AiController {
     })
     @PostMapping("/explain")
     public ApiResponse<ExplainResponse> explain(
-            @CurrentUser UUID userId, @RequestBody ExplainRequest request) {
+            @CurrentUser AuthPrincipal principal, @RequestBody ExplainRequest request) {
         validateExplainRequest(request);
 
-        AiService.ExplainOutcome outcome = aiService.explain(userId, request.surface(), request.facts());
+        // 데모 여부를 도메인까지 넘기는 이유(이슈 #143) — 호출 기록의 is_demo 는 데모 트래픽이
+        // 비용에서 차지하는 비중을 보는 축이고, 그 근거는 토큰의 is_demo 클레임뿐이다. 도메인이
+        // 사용자를 다시 조회해 알아내면 서술 요청마다 불필요한 쿼리가 하나 늘고, 계정이 데모로
+        // 만들어졌다는 사실과 이 요청이 데모 세션에서 왔다는 사실이 어긋날 수 있다.
+        AiService.ExplainOutcome outcome = aiService.explain(
+                principal.userId(), principal.isDemo(), request.surface(), request.facts());
 
         ExplainResponse response = new ExplainResponse(
                 new ExplainResponse.Explanation(

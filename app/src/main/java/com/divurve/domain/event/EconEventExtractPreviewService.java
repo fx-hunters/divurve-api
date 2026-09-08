@@ -2,7 +2,11 @@ package com.divurve.domain.event;
 
 import com.divurve.common.architecture.UseCase;
 import com.divurve.common.exception.InvalidRequestException;
+import com.divurve.domain.ai.AiCallLogRecorder;
+import com.divurve.domain.ai.AiCallOutcome;
+import com.divurve.domain.ai.entity.AiCallLog;
 import com.divurve.domain.port.EconEventExtractor;
+import com.divurve.domain.port.TokenUsage;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -45,17 +49,38 @@ public class EconEventExtractPreviewService {
 
     private final EconEventExtractor econEventExtractor;
     private final EconEventValidator econEventValidator;
+    private final AiCallLogRecorder aiCallLogRecorder;
     private final Clock clock;
 
     public EconEventExtractPreviewService(
             EconEventExtractor econEventExtractor,
             EconEventValidator econEventValidator,
+            AiCallLogRecorder aiCallLogRecorder,
             Clock clock) {
         this.econEventExtractor =
                 Objects.requireNonNull(econEventExtractor, "econEventExtractor");
         this.econEventValidator =
                 Objects.requireNonNull(econEventValidator, "econEventValidator");
+        this.aiCallLogRecorder = Objects.requireNonNull(aiCallLogRecorder, "aiCallLogRecorder");
         this.clock = Objects.requireNonNull(clock, "clock");
+    }
+
+    /**
+     * 미리보기 호출 한 건을 기록한다 (이슈 #143).
+     *
+     * <p>{@code user_id} 는 남기지 않는다 — 이 화면은 관리자가 열지만, 기록의 {@code user_id} 는
+     * "누구의 데이터로 서술했는가" 를 뜻하고 여기에는 그런 사용자가 없다. 관리자 조작 이력은
+     * 이 표가 아니라 감사 기록(#56)이 다룰 몫이다.
+     */
+    private void recordCall(
+            java.time.Instant startedAt,
+            String model,
+            TokenUsage usage,
+            AiCallOutcome outcome,
+            String errorSummary) {
+        int latencyMs = (int) java.time.Duration.between(startedAt, Instant.now(clock)).toMillis();
+        aiCallLogRecorder.record(AiCallLog.extract(
+                startedAt, null, model, usage, outcome, latencyMs, errorSummary));
     }
 
     /**
@@ -77,11 +102,17 @@ public class EconEventExtractPreviewService {
         EconEventExtractor.RawArticle article =
                 new EconEventExtractor.RawArticle(sourceUrl, text, Instant.now(clock));
 
+        Instant startedAt = Instant.now(clock);
         List<EconEventExtractor.ExtractedEvent> candidates;
         try {
-            candidates = econEventExtractor.extract(article);
+            EconEventExtractor.ExtractOutcome outcome = econEventExtractor.extract(article);
+            recordCall(startedAt, outcome.model(), outcome.usage(), AiCallOutcome.SUCCESS, null);
+            candidates = outcome.events();
         } catch (RuntimeException e) {
             // 외부 실패는 이 화면의 산출물이지 서버 오류가 아니다 — 500 대신 사유를 값으로 낸다.
+            // 다만 비용 관점에서는 실패한 호출도 일어난 호출이므로 기록은 남긴다(이슈 #143).
+            recordCall(startedAt, null, TokenUsage.NONE, AiCallOutcome.ERROR,
+                    AiCallLogRecorder.summarize(e));
             log.warn("이벤트 추출 실패 — 사유를 응답에 담는다. sourceUrl={}", sourceUrl, e);
             return new PreviewResult(
                     extractorName(), List.of(), Instant.now(clock), describeFailure(e));

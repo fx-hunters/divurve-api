@@ -85,8 +85,8 @@ class AnthropicMessageClientTest {
         assertThat(params.maxTokens()).isEqualTo(777);
         assertThat(params.system()).isPresent();
         assertThat(completion.text()).isEqualTo("{\"sentences\": []}");
-        assertThat(completion.inputTokens()).isEqualTo(120);
-        assertThat(completion.outputTokens()).isEqualTo(45);
+        assertThat(completion.usage().inputTokens()).isEqualTo(120);
+        assertThat(completion.usage().outputTokens()).isEqualTo(45);
     }
 
     @Test

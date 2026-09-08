@@ -54,24 +54,26 @@ public class ClaudeEconEventExtractor implements EconEventExtractor {
     }
 
     @Override
-    public List<ExtractedEvent> extract(RawArticle article) {
+    public ExtractOutcome extract(RawArticle article) {
         Objects.requireNonNull(article, "article");
 
         ClaudeMessageClient.Completion completion =
             messageClient.complete(prompt.system(), prompt.user(article));
 
         List<ExtractedEvent> events = prompt.parseEvents(completion.text());
-        logCallMetadata(article, completion, events.size());
-        return events;
+        logExtractedCount(article, events.size());
+        return new ExtractOutcome(events, props.model(), completion.usage());
     }
 
     /**
-     * 감사 기록 — 페이로드(원문·응답 전문) 없이 소스 URL·모델·토큰 수·추출 건수만 남긴다
-     * ({@link ClaudeAiProvider#logCallMetadata} 와 동일한 방식, 이슈 #74 제약 6).
+     * 추출 건수만 로그로 남긴다 (이슈 #74 제약 6).
+     *
+     * <p><b>토큰 수는 더 이상 여기서 찍지 않는다</b>(이슈 #143) — 사용량은
+     * {@link ExtractOutcome} 에 실려 도메인으로 올라가 {@code ai_call_logs} 에 기록된다. 추출
+     * 건수는 비용이 아니라 이 어댑터의 동작 자체를 보는 값이라 로그에 남긴다.
      */
-    private void logCallMetadata(RawArticle article, ClaudeMessageClient.Completion completion, int extractedCount) {
-        log.info("econ_event_extracted source_url={} model={} input_tokens={} output_tokens={} extracted_count={}",
-            article.sourceUrl(), props.model(), completion.inputTokens(), completion.outputTokens(),
-            extractedCount);
+    private void logExtractedCount(RawArticle article, int extractedCount) {
+        log.info("econ_event_extracted source_url={} model={} extracted_count={}",
+            article.sourceUrl(), props.model(), extractedCount);
     }
 }

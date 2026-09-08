@@ -20,9 +20,27 @@ public interface EconEventExtractor {
      * 원문 1건에서 이벤트 후보를 추출한다.
      *
      * @param article 크롤러가 확보한 원문 (grounding source)
-     * @return 추출된 이벤트 후보 목록. 검증 전 원시 문자열 그대로다.
+     * @return 추출된 이벤트 후보와 이 호출이 쓴 토큰. 후보는 검증 전 원시 문자열 그대로다.
      */
-    List<ExtractedEvent> extract(RawArticle article);
+    ExtractOutcome extract(RawArticle article);
+
+    /**
+     * 추출 한 번의 결과 (이슈 #143).
+     *
+     * <p>사용량을 함께 돌려주는 이유는 {@link AiProvider.ExplainResult} 와 같다 — 어댑터가 아는
+     * 값을 도메인이 기록해야 하고, 어댑터가 리포지토리를 직접 부르는 길은 ArchUnit 이 막는다.
+     *
+     * @param events 추출된 이벤트 후보. 하나도 없으면 빈 목록
+     * @param model  호출한 모델 ID. LLM 을 부르지 않은 구현은 {@code null}
+     * @param usage  이 호출이 쓴 토큰. LLM 을 부르지 않은 구현은 {@link TokenUsage#NONE}
+     */
+    record ExtractOutcome(List<ExtractedEvent> events, String model, TokenUsage usage) {
+
+        /** LLM 을 부르지 않은 구현이 쓰는 생성자. */
+        public static ExtractOutcome withoutLlm(List<ExtractedEvent> events) {
+            return new ExtractOutcome(events, null, TokenUsage.NONE);
+        }
+    }
 
     /**
      * 크롤러가 확보한 원문 한 건.
