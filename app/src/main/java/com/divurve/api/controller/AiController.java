@@ -52,7 +52,8 @@ public class AiController {
                 responseCode = "200", description = "서술 성공 또는 폴백(둘 다 200)"),
         @io.swagger.v3.oas.annotations.responses.ApiResponse(
                 responseCode = "400",
-                description = "surface 또는 facts 누락 · surface 가 허용 화면이 아님 · facts 상한 초과")
+                description = "surface 또는 facts 누락 · surface 가 허용 화면이 아님(ExplainSurface "
+                        + "목록 밖) · facts 상한 초과")
     })
     @PostMapping("/explain")
     public ApiResponse<ExplainResponse> explain(

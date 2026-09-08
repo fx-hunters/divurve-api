@@ -3,7 +3,7 @@ package com.divurve.infra.ai;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import com.divurve.domain.ai.AiService;
+import com.divurve.domain.ai.ExplainSurface;
 import com.divurve.domain.port.AiProvider;
 import com.divurve.domain.port.AiProvider.ExplainContext;
 import com.divurve.domain.settings.UserSettingsService;
@@ -28,7 +28,7 @@ class MockAiProviderTest {
     @Test
     void explain_forecast_summary는_simple_수준에서_4문장을_반환한다() {
         AiProvider.ExplainResult result = provider.explain(new ExplainContext(
-                AiService.SURFACE_FORECAST_SUMMARY, FORECAST_FACTS,
+                ExplainSurface.FORECAST_SUMMARY.code(), FORECAST_FACTS,
                 UserSettingsService.EXPLAIN_LEVEL_SIMPLE, "plain"));
 
         assertThat(result.sentences()).hasSize(4);
@@ -37,7 +37,7 @@ class MockAiProviderTest {
     @Test
     void explain_forecast_summary는_standard_수준에서도_4문장을_반환한다() {
         AiProvider.ExplainResult result = provider.explain(new ExplainContext(
-                AiService.SURFACE_FORECAST_SUMMARY, FORECAST_FACTS,
+                ExplainSurface.FORECAST_SUMMARY.code(), FORECAST_FACTS,
                 UserSettingsService.EXPLAIN_LEVEL_STANDARD, "finance"));
 
         assertThat(result.sentences()).hasSize(4);
@@ -47,7 +47,7 @@ class MockAiProviderTest {
     @Test
     void explain_forecast_summary는_detailed_수준에서도_4문장을_반환한다() {
         AiProvider.ExplainResult result = provider.explain(new ExplainContext(
-                AiService.SURFACE_FORECAST_SUMMARY, FORECAST_FACTS,
+                ExplainSurface.FORECAST_SUMMARY.code(), FORECAST_FACTS,
                 UserSettingsService.EXPLAIN_LEVEL_DETAILED, "dev"));
 
         assertThat(result.sentences()).hasSize(4);
@@ -59,7 +59,7 @@ class MockAiProviderTest {
         facts.put("regime", "elevated");
 
         AiProvider.ExplainResult result = provider.explain(new ExplainContext(
-                AiService.SURFACE_FORECAST_SUMMARY, facts,
+                ExplainSurface.FORECAST_SUMMARY.code(), facts,
                 UserSettingsService.EXPLAIN_LEVEL_SIMPLE, "plain"));
 
         assertThat(result.sentences()).hasSize(4);
@@ -69,7 +69,7 @@ class MockAiProviderTest {
     @Test
     void explain_forecast_summary는_구간이_없으면_지어내지_않고_안내문을_반환한다() {
         AiProvider.ExplainResult result = provider.explain(new ExplainContext(
-                AiService.SURFACE_FORECAST_SUMMARY, Map.of(),
+                ExplainSurface.FORECAST_SUMMARY.code(), Map.of(),
                 UserSettingsService.EXPLAIN_LEVEL_SIMPLE, "plain"));
 
         assertThat(result.sentences()).hasSize(4);
@@ -118,7 +118,7 @@ class MockAiProviderTest {
     @Test
     void explain_여러_번_호출해도_같은_facts에는_같은_구조를_반환한다() {
         ExplainContext context = new ExplainContext(
-                AiService.SURFACE_FORECAST_SUMMARY, FORECAST_FACTS,
+                ExplainSurface.FORECAST_SUMMARY.code(), FORECAST_FACTS,
                 UserSettingsService.EXPLAIN_LEVEL_STANDARD, "finance");
 
         AiProvider.ExplainResult first = provider.explain(context);
@@ -175,7 +175,7 @@ class MockAiProviderTest {
         facts.put("regime", "stress");
 
         AiProvider.ExplainResult result = provider.explain(new ExplainContext(
-                AiService.SURFACE_FORECAST_SUMMARY, facts,
+                ExplainSurface.FORECAST_SUMMARY.code(), facts,
                 UserSettingsService.EXPLAIN_LEVEL_DETAILED, "dev"));
 
         assertThat(result.sentences()).hasSize(4);
@@ -188,7 +188,7 @@ class MockAiProviderTest {
         facts.put("pair_code", "   ");
 
         AiProvider.ExplainResult result = provider.explain(new ExplainContext(
-                AiService.SURFACE_FORECAST_SUMMARY, facts,
+                ExplainSurface.FORECAST_SUMMARY.code(), facts,
                 UserSettingsService.EXPLAIN_LEVEL_SIMPLE, "plain"));
 
         assertThat(String.join(" ", result.sentences())).contains("환율은(는) 현재");
@@ -200,7 +200,7 @@ class MockAiProviderTest {
         facts.put("interval_80", Map.of("lo", 1346.0));
 
         AiProvider.ExplainResult result = provider.explain(new ExplainContext(
-                AiService.SURFACE_FORECAST_SUMMARY, facts,
+                ExplainSurface.FORECAST_SUMMARY.code(), facts,
                 UserSettingsService.EXPLAIN_LEVEL_SIMPLE, "plain"));
 
         assertThat(result.sentences()).hasSize(4);

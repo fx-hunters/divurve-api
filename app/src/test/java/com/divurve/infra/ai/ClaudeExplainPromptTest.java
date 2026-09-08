@@ -3,6 +3,7 @@ package com.divurve.infra.ai;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.divurve.domain.ai.ExplainSurface;
 import com.divurve.domain.port.AiProvider.ExplainContext;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.LinkedHashMap;
@@ -27,7 +28,7 @@ class ClaudeExplainPromptTest {
 
         assertThat(system).contains("facts 에 있는 값만");
         assertThat(system).contains("어떤 산술도 하지 않는다");
-        assertThat(system).contains("정확히 4개의 문장");
+        assertThat(system).contains("sentence_count 가 지정한 개수");
         assertThat(system).contains("elevated");
         assertThat(system).contains("sentences");
     }
@@ -38,12 +39,30 @@ class ClaudeExplainPromptTest {
         facts.put("pair_code", "USD_KRW");
         facts.put("current_rate", 1380.5);
 
-        String user = prompt.user(new ExplainContext("forecast_summary", facts, "simple", "plain"));
+        String user = prompt.user(
+                new ExplainContext("forecast_summary", facts, "simple", "plain"),
+                ExplainSurface.FORECAST_SUMMARY);
 
         assertThat(user).contains("explain_level: simple");
         assertThat(user).contains("explain_domain: plain");
         assertThat(user).contains("\"pair_code\" : \"USD_KRW\"");
         assertThat(user).contains("1380.5");
+    }
+
+    /**
+     * 화면마다 달라지는 것이 프롬프트에 실제로 실리는지 본다 (이슈 #135). 이것이 빠지면 모델은
+     * 어느 화면의 설명인지 모른 채 facts 키를 순서대로 옮겨 적게 되고, 그 결과가 사용자가 홈
+     * 화면에서 보던 "interval 80 lo는(은) ..." 문장이다.
+     */
+    @Test
+    void user_프롬프트는_화면_규약을_싣는다() {
+        String user = prompt.user(
+                new ExplainContext("xray_exposure", Map.of("fx_ratio", 0.632), "simple", "plain"),
+                ExplainSurface.XRAY_EXPOSURE);
+
+        assertThat(user).contains("surface: xray_exposure");
+        assertThat(user).contains("sentence_count: 3");
+        assertThat(user).contains(ExplainSurface.XRAY_EXPOSURE.focus());
     }
 
     @Test
@@ -125,7 +144,8 @@ class ClaudeExplainPromptTest {
         Map<String, Object> facts = Map.of("bad", new Object());
 
         assertThatThrownBy(() -> prompt.user(
-                new ExplainContext("forecast_summary", facts, "simple", "plain")))
+                new ExplainContext("forecast_summary", facts, "simple", "plain"),
+                ExplainSurface.FORECAST_SUMMARY))
                 .isInstanceOf(AiResponseFormatException.class)
                 .hasMessageContaining("직렬화");
     }

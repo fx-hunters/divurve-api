@@ -731,13 +731,29 @@ v1의 안전모드 조회 엔드포인트를 대체한다. **상태를 알리되
 
 | 조건 | `field` | 기본 상한 |
 |---|---|---|
-| `surface` 가 허용 목록 밖 | `surface` | `forecast_summary` · `home_market_summary` **둘뿐** |
+| `surface` 가 허용 목록 밖 | `surface` | 아래 표의 7개 화면뿐 |
 | 정규화된 `facts` JSON 이 너무 길다 | `facts` | 4,096자 |
 | `facts` 안의 전체 항목 수가 너무 많다 | `facts` | 128개 (배열 원소도 센다) |
 | `facts` 중첩이 너무 깊다 | `facts` | 4단계 (`facts` 자체가 1단계, `interval_80` 이 2단계) |
 
-- **화면을 늘리려면 백엔드 배포가 필요하다.** 허용 목록은 코드(`ExplainRequestGuard`)에 있다 —
-  새 `surface` 를 보내기 전에 백엔드에 값 추가를 요청해야 하고, 그러지 않으면 400 이다.
+**허용 `surface` 와 화면별 문장 수** (이슈 #135·#153, 코드: `ExplainSurface`)
+
+| `surface` | 문장 수 | 화면 |
+|---|---|---|
+| `forecast_summary` | 4 | 환율 전망 (FR-FC-07·FR-AI-04 가 정한 값) |
+| `home_market_summary` | 3 | 홈 — 시장 요약 |
+| `home_fx_status` | 3 | 홈 — 내 외화 현황 |
+| `home_goals` | 3 | 홈 — 내 목표 |
+| `home_calendar` | 3 | 홈 — 경제 일정 |
+| `xray_exposure` | 3 | X-Ray — 통화 노출 분해 |
+| `xray_fitness` | 3 | X-Ray — 목표 적합도 |
+
+- **화면을 늘리려면 백엔드 배포가 필요하다.** 허용 목록·문장 수·서술 초점은 모두 코드
+  (`ExplainSurface`) 한 곳에 있다 — 새 `surface` 를 보내기 전에 백엔드에 값 추가를 요청해야 하고,
+  그러지 않으면 400 이다. 이슈 #153 은 프론트가 이미 배포한 `xray_*` 두 화면이 이 목록에 없어
+  **내부 계약 메시지가 사용자 화면에 그대로 노출된** 일이었다.
+- 폴백 템플릿은 이 문장 수 규약을 따르지 않는다(항상 4문장). 화면은 응답의 `sentence_count` 를
+  보고 그리며, 문장 수를 미리 가정하지 않는다.
 - 세 상한은 환경변수(`AI_EXPLAIN_MAX_FACTS_*`)로 올릴 수 있다. 새 화면의 `facts` 모양이 상한에
   걸렸을 때 배포를 기다리지 않기 위한 것이다.
 - 실제 화면이 보내는 `facts` 는 200자 안쪽이라 기본 상한에 한참 못 미친다. 걸렸다면 화면이 쓰지
@@ -757,7 +773,7 @@ v1의 안전모드 조회 엔드포인트를 대체한다. **상태를 알리되
 | 규칙 | 근거 |
 |---|---|
 | `facts`에 없는 숫자를 AI가 만들지 않는다. 서버는 응답의 숫자를 `facts`와 대조한다 | FR-AI-02, FR-AI-05, NFR-AI-02 |
-| `surface: forecast_summary`는 항상 4문장이다. `explain_level`은 내용 구성만 바꾼다 | FR-AI-04, FR-FC-07 |
+| 문장 수는 `surface` 마다 고정이다(`forecast_summary` 4, 나머지 3). `explain_level` 은 내용 구성만 바꾼다 | FR-AI-04, FR-FC-07, 이슈 #135 |
 | 검증 실패 시 `fallback: true`와 고정 템플릿 문장을 내리며 **200을 유지**한다 | FR-AI-06, NFR-AI-03 |
 | 폴백했다면 `verification.fallback_reason` 이 네 경로 중 어느 것인지 말한다 | 이슈 #122 |
 | `surface` 는 닫힌 어휘다. 목록 밖 값과 `facts` 상한 초과는 **400** 이다 | 이슈 #139 |

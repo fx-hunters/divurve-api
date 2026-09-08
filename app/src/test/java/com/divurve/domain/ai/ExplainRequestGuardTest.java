@@ -45,13 +45,23 @@ class ExplainRequestGuardTest {
     }
 
     @Test
-    @DisplayName("허용 목록은 프론트가 실제로 보내는 두 화면을 담는다")
+    @DisplayName("허용 목록은 프론트가 이미 배포한 화면을 전부 담는다")
     void allowedSurfacesCoverEveryScreenTheClientActuallyCalls() {
-        // 백엔드 코드에는 forecast_summary 상수만 있어 하나로 보이지만, 홈 시장 요약도
-        // /ai/explain 을 부른다(divurve-web market-summary-section.tsx). 하나만 허용하면
-        // 홈 화면의 설명이 즉시 400 으로 깨진다 — 이 단정이 그 회귀를 막는다.
+        // 이 단정이 이 파일에서 가장 값비싼 것이다. 화이트리스트가 프론트가 보내는 값보다 좁으면
+        // 컴파일도 테스트도 못 잡고 <b>배포 후 사용자 화면에서만</b> 드러난다 — 이슈 #153 에서
+        // X-Ray 화면 두 곳에 내부 계약 메시지("surface 'xray_exposure' 는 서술 대상이 아닙니다")가
+        // 그대로 노출된 경위가 정확히 그것이다. 화면을 늘릴 때는 ExplainSurface 에 값을 더한다.
         assertThat(ExplainRequestGuard.ALLOWED_SURFACES)
-                .containsExactlyInAnyOrder("forecast_summary", "home_market_summary");
+                .contains("forecast_summary", "home_market_summary", "xray_exposure", "xray_fitness");
+    }
+
+    @Test
+    @DisplayName("허용 목록의 출처는 ExplainSurface 하나다")
+    void allowedSurfacesComeFromTheSingleSourceOfTruth() {
+        // 목록을 여기서 다시 열거하지 않는다 — 그러면 진실이 둘이 되고, 둘 중 하나만 고쳐지는
+        // 것이 이슈 #153 이었다. 확인할 것은 "허용 여부와 서술 규약이 같은 곳에서 나온다" 이다.
+        assertThat(ExplainRequestGuard.ALLOWED_SURFACES)
+                .isEqualTo(ExplainSurface.codes());
     }
 
     @Test
