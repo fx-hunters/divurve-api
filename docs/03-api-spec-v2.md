@@ -689,12 +689,45 @@ v1의 안전모드 조회 엔드포인트를 대체한다. **상태를 알리되
 - 이 두 필드와 `fallback_reason` 은 **`null` 이어도 응답에서 생략되지 않는다**(전역 `non_null` 을
   이 객체에서만 뒤집는다). 필드가 사라지면 "검증 안 됨" 과 "필드 없음" 을 구분할 수 없다.
 
+#### 입력 상한과 `surface` 어휘 — **400 이 나는 유일한 경로** (이슈 #139)
+
+`facts` 는 클라이언트가 보내는 임의 JSON 이고 프롬프트에 **그대로** 실린다. 상한이 없으면 요청
+하나로 입력 토큰이 폭발하므로, 호출 **전에** 잘라낸다. 아래 넷은 `fallback: true` 가 아니라
+`400 VALIDATION_FAILED` 다 — 잘못된 요청은 AI 실패가 아니므로 FR-AI-06 과 충돌하지 않는다.
+
+| 조건 | `field` | 기본 상한 |
+|---|---|---|
+| `surface` 가 허용 목록 밖 | `surface` | `forecast_summary` · `home_market_summary` **둘뿐** |
+| 정규화된 `facts` JSON 이 너무 길다 | `facts` | 4,096자 |
+| `facts` 안의 전체 항목 수가 너무 많다 | `facts` | 128개 (배열 원소도 센다) |
+| `facts` 중첩이 너무 깊다 | `facts` | 4단계 (`facts` 자체가 1단계, `interval_80` 이 2단계) |
+
+- **화면을 늘리려면 백엔드 배포가 필요하다.** 허용 목록은 코드(`ExplainRequestGuard`)에 있다 —
+  새 `surface` 를 보내기 전에 백엔드에 값 추가를 요청해야 하고, 그러지 않으면 400 이다.
+- 세 상한은 환경변수(`AI_EXPLAIN_MAX_FACTS_*`)로 올릴 수 있다. 새 화면의 `facts` 모양이 상한에
+  걸렸을 때 배포를 기다리지 않기 위한 것이다.
+- 실제 화면이 보내는 `facts` 는 200자 안쪽이라 기본 상한에 한참 못 미친다. 걸렸다면 화면이 쓰지
+  않는 값을 함께 보내고 있는지 먼저 확인한다.
+
+#### 같은 입력의 재요청은 캐시에서 나간다 (이슈 #139)
+
+`(surface, facts, explain_level, explain_domain)` 이 같으면 1시간 안에는 실 호출 없이 같은 문장이
+나간다. **응답 형태는 캐시 히트와 실 호출이 완전히 같다** — `fallback: false`, `verification` 둘 다
+`true` 다(담긴 문장은 저장될 때 두 검증을 통과했고, 두 검증은 키가 고정한 `(문장, facts)` 만의
+함수다). 프론트가 구분할 필요도, 구분할 방법도 없다. 관리자 화면에서는
+`ai_call_logs.outcome = 'cache_hit'`(토큰 0)으로 보인다.
+
+폴백은 캐시하지 않는다 — 일시적인 provider 장애로 나온 템플릿 문장이 한 시간 동안 고정되면,
+장애가 끝난 뒤에도 모두가 계속 폴백을 받는다.
+
 | 규칙 | 근거 |
 |---|---|
 | `facts`에 없는 숫자를 AI가 만들지 않는다. 서버는 응답의 숫자를 `facts`와 대조한다 | FR-AI-02, FR-AI-05, NFR-AI-02 |
 | `surface: forecast_summary`는 항상 4문장이다. `explain_level`은 내용 구성만 바꾼다 | FR-AI-04, FR-FC-07 |
 | 검증 실패 시 `fallback: true`와 고정 템플릿 문장을 내리며 **200을 유지**한다 | FR-AI-06, NFR-AI-03 |
 | 폴백했다면 `verification.fallback_reason` 이 네 경로 중 어느 것인지 말한다 | 이슈 #122 |
+| `surface` 는 닫힌 어휘다. 목록 밖 값과 `facts` 상한 초과는 **400** 이다 | 이슈 #139 |
+| 같은 입력의 재요청은 1시간 캐시에서 나가고, 폴백은 캐시하지 않는다 | 이슈 #139 |
 | 프롬프트와 응답 전문은 `audit_logs(action='ai_explained')`에 기록 | ERD §10 |
 | `explain_level`·`explain_domain`은 이 엔드포인트 밖의 어느 계산에도 전달되지 않는다 | FR-CM-08, ERD 설계원칙 |
 

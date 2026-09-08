@@ -6,15 +6,18 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.divurve.common.exception.InvalidRequestException;
 import com.divurve.domain.ai.entity.AiCallLog;
 import com.divurve.domain.port.AiProvider;
 import com.divurve.domain.port.AiProvider.ExplainContext;
 import com.divurve.domain.port.AiProvider.ExplainResult;
+import com.divurve.domain.port.ExplainResultCache;
 import com.divurve.domain.port.TokenUsage;
 import com.divurve.domain.settings.SettingsView;
 import com.divurve.domain.settings.UserSettingsService;
@@ -25,6 +28,7 @@ import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -52,6 +56,12 @@ class AiServiceTest {
 
     @Mock
     private AiProvider aiProvider;
+
+    @Mock
+    private ExplainRequestGuard explainRequestGuard;
+
+    @Mock
+    private ExplainResultCache explainResultCache;
 
     @Mock
     private AiCallLogRecorder aiCallLogRecorder;
@@ -82,13 +92,17 @@ class AiServiceTest {
     /** 실 LLM 을 부른 것처럼 보이는 결과 — 모델과 토큰이 있어야 기록 검증이 의미를 갖는다(이슈 #143). */
     private static final String MODEL = "claude-opus-5";
 
+    /** 가드가 돌려주는 정규화된 facts — 캐시 키의 재료다(이슈 #139). */
+    private static final String CANONICAL_FACTS = "{\"amount\":100000.0}";
+
     private static AiProvider.ExplainResult llmResult(List<String> sentences) {
         return new AiProvider.ExplainResult(sentences, MODEL, TokenUsage.of(100, 40));
     }
 
     private AiService newService(Clock clock) {
-        return new AiService(aiProvider, aiCallLogRecorder, validator, narrativeFilter,
-                userSettingsService, regimeDisclosureCheck, clock, TOTAL_BUDGET);
+        return new AiService(aiProvider, explainRequestGuard, explainResultCache,
+                aiCallLogRecorder, validator, narrativeFilter, userSettingsService,
+                regimeDisclosureCheck, clock, TOTAL_BUDGET);
     }
 
     private void stubSettings(String level, String domain) {
@@ -104,7 +118,7 @@ class AiServiceTest {
         when(validator.verify(sentences, facts)).thenReturn(true);
         when(narrativeFilter.detect("자산은 100000입니다.")).thenReturn(List.of());
 
-        AiService.ExplainOutcome outcome = service.explain(userId, false, "profile_fit", facts);
+        AiService.ExplainOutcome outcome = service.explain(userId, false, "home_market_summary", facts);
 
         assertThat(outcome.sentences()).isEqualTo(sentences);
         assertThat(outcome.fallback()).isFalse();
@@ -124,7 +138,7 @@ class AiServiceTest {
         when(validator.verify(bad, facts)).thenReturn(false);
         when(narrativeFilter.detect("자산은 999999입니다.")).thenReturn(List.of());
 
-        AiService.ExplainOutcome outcome = service.explain(userId, false, "profile_fit", facts);
+        AiService.ExplainOutcome outcome = service.explain(userId, false, "home_market_summary", facts);
 
         assertThat(outcome.fallback()).isTrue();
         assertThat(outcome.sentences()).isEqualTo(AiService.FALLBACK_SENTENCES);
@@ -145,7 +159,7 @@ class AiServiceTest {
         when(aiProvider.explain(any(ExplainContext.class))).thenReturn(llmResult(risky));
         when(narrativeFilter.detect("반드시 매수하세요.")).thenReturn(List.of("반드시", "매수하세요"));
 
-        AiService.ExplainOutcome outcome = service.explain(userId, false, "profile_fit", facts);
+        AiService.ExplainOutcome outcome = service.explain(userId, false, "home_market_summary", facts);
 
         assertThat(outcome.fallback()).isTrue();
         assertThat(outcome.sentences()).isEqualTo(AiService.FALLBACK_SENTENCES);
@@ -253,7 +267,7 @@ class AiServiceTest {
 
     @Test
     void explain_userId가_null이면_NullPointerException을_던진다() {
-        assertThatThrownBy(() -> service.explain(null, false, "profile_fit", facts))
+        assertThatThrownBy(() -> service.explain(null, false, "home_market_summary", facts))
                 .isInstanceOf(NullPointerException.class);
     }
 
@@ -265,31 +279,34 @@ class AiServiceTest {
 
     @Test
     void explain_facts가_null이면_NullPointerException을_던진다() {
-        assertThatThrownBy(() -> service.explain(userId, false, "profile_fit", null))
+        assertThatThrownBy(() -> service.explain(userId, false, "home_market_summary", null))
                 .isInstanceOf(NullPointerException.class);
     }
 
     @Test
     void 생성자는_협력자가_null_이면_실패한다() {
         Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);
-        assertThatThrownBy(() -> new AiService(null, aiCallLogRecorder, validator, narrativeFilter,
-                userSettingsService, regimeDisclosureCheck, clock, TOTAL_BUDGET))
-                .isInstanceOf(NullPointerException.class);
-        assertThatThrownBy(() -> new AiService(aiProvider, null, validator, narrativeFilter,
-                userSettingsService, regimeDisclosureCheck, clock, TOTAL_BUDGET))
-                .isInstanceOf(NullPointerException.class);
-        assertThatThrownBy(() -> new AiService(aiProvider, aiCallLogRecorder, null, narrativeFilter, userSettingsService,
-                regimeDisclosureCheck, clock, TOTAL_BUDGET)).isInstanceOf(NullPointerException.class);
-        assertThatThrownBy(() -> new AiService(aiProvider, aiCallLogRecorder, validator, null, userSettingsService,
-                regimeDisclosureCheck, clock, TOTAL_BUDGET)).isInstanceOf(NullPointerException.class);
-        assertThatThrownBy(() -> new AiService(aiProvider, aiCallLogRecorder, validator, narrativeFilter, null,
-                regimeDisclosureCheck, clock, TOTAL_BUDGET)).isInstanceOf(NullPointerException.class);
-        assertThatThrownBy(() -> new AiService(aiProvider, aiCallLogRecorder, validator, narrativeFilter, userSettingsService,
-                null, clock, TOTAL_BUDGET)).isInstanceOf(NullPointerException.class);
-        assertThatThrownBy(() -> new AiService(aiProvider, aiCallLogRecorder, validator, narrativeFilter, userSettingsService,
-                regimeDisclosureCheck, null, TOTAL_BUDGET)).isInstanceOf(NullPointerException.class);
-        assertThatThrownBy(() -> new AiService(aiProvider, aiCallLogRecorder, validator, narrativeFilter, userSettingsService,
-                regimeDisclosureCheck, clock, null)).isInstanceOf(NullPointerException.class);
+        Object[] collaborators = {aiProvider, explainRequestGuard, explainResultCache,
+                aiCallLogRecorder, validator, narrativeFilter, userSettingsService,
+                regimeDisclosureCheck, clock, TOTAL_BUDGET};
+
+        // 자리를 하나씩 null 로 바꿔 돈다 — 열 자리를 나열하면 새 협력자가 늘 때마다 열 줄을
+        // 전부 손봐야 하고, 그때 빠뜨린 한 자리가 조용히 검증 없이 남는다.
+        for (int index = 0; index < collaborators.length; index++) {
+            Object[] args = collaborators.clone();
+            args[index] = null;
+            int nulled = index;
+            assertThatThrownBy(() -> construct(args))
+                    .as("%d번째 인자가 null", nulled)
+                    .isInstanceOf(NullPointerException.class);
+        }
+    }
+
+    private static AiService construct(Object[] a) {
+        return new AiService((AiProvider) a[0], (ExplainRequestGuard) a[1],
+                (ExplainResultCache) a[2], (AiCallLogRecorder) a[3], (AiResponseValidator) a[4],
+                (NarrativeFilter) a[5], (UserSettingsService) a[6], (RegimeDisclosureCheck) a[7],
+                (Clock) a[8], (Duration) a[9]);
     }
 
     /**
@@ -306,8 +323,10 @@ class AiServiceTest {
         when(narrativeFilter.detect("자산은 999999입니다.")).thenReturn(List.of());
 
         // 기본값(8s)이면 소진되는 시계지만, 예산을 늘리면 재시도가 살아난다.
-        AiService generous = new AiService(aiProvider, aiCallLogRecorder, validator, narrativeFilter, userSettingsService,
-                regimeDisclosureCheck, new SteppingClock(NOW, TOTAL_BUDGET), Duration.ofSeconds(60));
+        AiService generous = new AiService(aiProvider, explainRequestGuard, explainResultCache,
+                aiCallLogRecorder, validator, narrativeFilter, userSettingsService,
+                regimeDisclosureCheck, new SteppingClock(NOW, TOTAL_BUDGET),
+                Duration.ofSeconds(60));
 
         AiService.ExplainOutcome outcome = generous.explain(userId, false, "forecast_summary", facts);
 
@@ -372,14 +391,14 @@ class AiServiceTest {
         when(validator.verify(sentences, facts)).thenReturn(true);
         when(narrativeFilter.detect("자산은 100000입니다.")).thenReturn(List.of());
 
-        service.explain(userId, true, "profile_fit", facts);
+        service.explain(userId, true, "home_market_summary", facts);
 
         ArgumentCaptor<AiCallLog> captured = ArgumentCaptor.forClass(AiCallLog.class);
         verify(aiCallLogRecorder).record(captured.capture());
         AiCallLog recorded = captured.getValue();
         assertThat(recorded.getPurpose()).isEqualTo("narrate");
         assertThat(recorded.getOutcome()).isEqualTo("success");
-        assertThat(recorded.getSurface()).isEqualTo("profile_fit");
+        assertThat(recorded.getSurface()).isEqualTo("home_market_summary");
         assertThat(recorded.getModel()).isEqualTo(MODEL);
         assertThat(recorded.getUserId()).isEqualTo(userId);
         assertThat(recorded.isDemo())
@@ -445,7 +464,7 @@ class AiServiceTest {
         when(validator.verify(sentences, facts)).thenReturn(true);
         when(narrativeFilter.detect("템플릿 문장.")).thenReturn(List.of());
 
-        service.explain(userId, false, "profile_fit", facts);
+        service.explain(userId, false, "home_market_summary", facts);
 
         ArgumentCaptor<AiCallLog> captured = ArgumentCaptor.forClass(AiCallLog.class);
         verify(aiCallLogRecorder).record(captured.capture());
@@ -455,5 +474,111 @@ class AiServiceTest {
                 .as("요청은 있었고 비용은 0 이었다 — 이슈 #140 의 쿼터는 요청 수를 센다")
                 .isNull();
         assertThat(recorded.getInputTokens()).isZero();
+    }
+
+    // ---------------------------------------------------------------------
+    // 입력 가드 · 응답 캐시 (이슈 #139)
+    // ---------------------------------------------------------------------
+
+    @Test
+    @DisplayName("가드가 거절하면 설정 조회도 provider 호출도 하지 않는다")
+    void guardRejectionShortCircuitsEverything() {
+        when(explainRequestGuard.canonicalize("forecast_summary", facts))
+                .thenThrow(new InvalidRequestException("facts 가 너무 큽니다", "facts"));
+
+        assertThatThrownBy(() -> service.explain(userId, false, "forecast_summary", facts))
+                .isInstanceOf(InvalidRequestException.class);
+
+        // 거절할 요청 때문에 DB 를 치거나 토큰을 쓰지 않는다 — 막으려던 비용이 그것이다.
+        verify(userSettingsService, never()).getSettings(any());
+        verify(aiProvider, never()).explain(any(ExplainContext.class));
+        verify(aiCallLogRecorder, never()).record(any());
+    }
+
+    @Test
+    @DisplayName("캐시에 있으면 provider 를 부르지 않고 cache_hit 로 기록한다")
+    void cacheHitSkipsProviderAndRecordsZeroCost() {
+        stubSettings("standard", "finance");
+        when(explainRequestGuard.canonicalize("forecast_summary", facts))
+                .thenReturn(CANONICAL_FACTS);
+        List<String> cachedSentences = List.of("담아 둔 문장입니다.");
+        when(explainResultCache.find(anyString())).thenReturn(Optional.of(cachedSentences));
+
+        AiService.ExplainOutcome outcome =
+                service.explain(userId, true, "forecast_summary", facts);
+
+        assertThat(outcome.sentences()).isEqualTo(cachedSentences);
+        assertThat(outcome.fallback()).isFalse();
+        assertThat(outcome.numericMatch())
+                .as("담긴 문장은 저장될 때 통과했고, 두 검사는 키가 고정한 (문장, facts) 만의 함수다")
+                .isTrue();
+        assertThat(outcome.regimeDisclosed()).isTrue();
+        assertThat(outcome.explainLevel()).isEqualTo("standard");
+
+        verify(aiProvider, never()).explain(any(ExplainContext.class));
+        ArgumentCaptor<AiCallLog> captured = ArgumentCaptor.forClass(AiCallLog.class);
+        verify(aiCallLogRecorder).record(captured.capture());
+        AiCallLog recorded = captured.getValue();
+        assertThat(recorded.getOutcome()).isEqualTo("cache_hit");
+        assertThat(recorded.getModel())
+                .as("이 요청은 LLM 을 부르지 않았다 — 원래 모델을 적으면 토큰 0 짜리 호출로 보인다")
+                .isNull();
+        assertThat(recorded.getInputTokens()).isZero();
+        assertThat(recorded.getOutputTokens()).isZero();
+        assertThat(recorded.isDemo()).isTrue();
+    }
+
+    @Test
+    @DisplayName("검증을 통과한 문장만 캐시에 담고, 키에 설명 선호를 포함한다")
+    void cachesOnlyVerifiedSentencesUnderPreferenceAwareKey() {
+        stubSettings("detailed", "dev");
+        when(explainRequestGuard.canonicalize("forecast_summary", facts))
+                .thenReturn(CANONICAL_FACTS);
+        List<String> sentences = List.of("자산은 100000입니다.");
+        when(aiProvider.explain(any(ExplainContext.class))).thenReturn(llmResult(sentences));
+        when(validator.verify(sentences, facts)).thenReturn(true);
+        when(narrativeFilter.detect("자산은 100000입니다.")).thenReturn(List.of());
+
+        service.explain(userId, false, "forecast_summary", facts);
+
+        ArgumentCaptor<String> key = ArgumentCaptor.forClass(String.class);
+        verify(explainResultCache).put(key.capture(), eq(sentences));
+        assertThat(key.getValue())
+                .as("같은 facts 라도 explain_level·explain_domain 이 다르면 문장이 다르다")
+                .contains("forecast_summary", "detailed", "dev", CANONICAL_FACTS);
+    }
+
+    @Test
+    @DisplayName("폴백은 캐시에 담지 않는다 — 일시적 장애가 TTL 동안 고정된다")
+    void fallbackIsNeverCached() {
+        stubSettings("standard", "finance");
+        when(explainRequestGuard.canonicalize("forecast_summary", facts))
+                .thenReturn(CANONICAL_FACTS);
+        when(aiProvider.explain(any(ExplainContext.class)))
+                .thenThrow(new IllegalStateException("타임아웃"));
+
+        AiService.ExplainOutcome outcome =
+                service.explain(userId, false, "forecast_summary", facts);
+
+        assertThat(outcome.fallback()).isTrue();
+        verify(explainResultCache, never()).put(anyString(), anyList());
+    }
+
+    @Test
+    @DisplayName("정규화가 다르면 캐시 키도 다르다 — Map 순회 순서에 기대지 않는다")
+    void cacheKeyFollowsCanonicalFactsNotMapOrder() {
+        stubSettings("simple", "plain");
+        when(explainRequestGuard.canonicalize(anyString(), anyMap()))
+                .thenReturn(CANONICAL_FACTS, "{\"b\":2,\"a\":1}");
+        when(explainResultCache.find(anyString())).thenReturn(Optional.empty());
+        when(aiProvider.explain(any(ExplainContext.class)))
+                .thenThrow(new IllegalStateException("호출까지 갈 필요 없다"));
+
+        service.explain(userId, false, "forecast_summary", facts);
+        service.explain(userId, false, "forecast_summary", facts);
+
+        ArgumentCaptor<String> keys = ArgumentCaptor.forClass(String.class);
+        verify(explainResultCache, times(2)).find(keys.capture());
+        assertThat(keys.getAllValues().get(0)).isNotEqualTo(keys.getAllValues().get(1));
     }
 }

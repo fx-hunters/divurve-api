@@ -3,6 +3,7 @@ package com.divurve.domain.ai;
 import com.divurve.common.architecture.UseCase;
 import com.divurve.domain.ai.entity.AiCallLog;
 import com.divurve.domain.port.AiProvider;
+import com.divurve.domain.port.ExplainResultCache;
 import com.divurve.domain.port.TokenUsage;
 import com.divurve.domain.settings.SettingsView;
 import com.divurve.domain.settings.UserSettingsService;
@@ -13,6 +14,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -50,6 +52,13 @@ import org.springframework.transaction.annotation.Transactional;
  *       조용히 사라지는 상태였다.</li>
  * </ul>
  *
+ * <p><b>비용 방어</b>(이슈 #139). 실 API 를 켜는 순간 비용은 입력 크기 × 호출 횟수다. 두 축을
+ * 각각 막는다 — {@link ExplainRequestGuard} 가 {@code surface} 어휘와 {@code facts} 크기를
+ * <b>호출 전에</b> 잘라내고(초과는 400), {@link ExplainResultCache} 가 같은 입력의 재요청을
+ * 흡수한다. 특히 데모 계정은 {@code DemoSampleData} 템플릿 하나를 복제하므로 {@code facts} 가
+ * 문자 그대로 같아, 데모 트래픽 대부분이 캐시 한 건에 모인다. 사용자별 쿼터와 일일 킬스위치는
+ * 아직 범위 밖이다(이슈 #140).
+ *
  * <p><b>감사 기록(ERD §10 {@code audit_logs}, action='ai_explained')은 여전히 범위 밖이다</b>(이슈 #56).
  * 마스킹 범위가 정해질 때까지 어댑터가 <b>페이로드 없이 호출 메타만</b> 로그로 남긴다.
  */
@@ -58,6 +67,16 @@ public class AiService {
 
     /** {@code forecast_summary} 는 항상 4문장이다 (FR-FC-07, FR-AI-04). */
     public static final String SURFACE_FORECAST_SUMMARY = "forecast_summary";
+
+    /**
+     * 홈 화면의 시장 요약 (이슈 #139). 프롬프트 규약이 확정되지 않아 실 LLM 어댑터는 이 화면을
+     * {@code MockAiProvider} 템플릿에 넘기지만, <b>프론트가 실제로 보내는 값</b>이므로
+     * {@link ExplainRequestGuard#ALLOWED_SURFACES} 에 반드시 들어 있어야 한다.
+     */
+    public static final String SURFACE_HOME_MARKET_SUMMARY = "home_market_summary";
+
+    /** 캐시 키를 만들 때 재료 사이에 끼우는 구분자 — 재료 값에는 나타날 수 없는 문자를 쓴다. */
+    private static final char KEY_SEPARATOR = '\u0000';
 
     /**
      * 생성·검증 재시도 상한. 문서 §8 이 "재생성 횟수 상한"을 미결정으로 남겨 뒀다 — 결정론적
@@ -89,6 +108,8 @@ public class AiService {
             "잠시 후 다시 시도하면 설명이 정상적으로 표시될 수 있습니다.");
 
     private final AiProvider aiProvider;
+    private final ExplainRequestGuard explainRequestGuard;
+    private final ExplainResultCache explainResultCache;
     private final AiCallLogRecorder aiCallLogRecorder;
     private final AiResponseValidator numericValidator;
     private final NarrativeFilter narrativeFilter;
@@ -99,6 +120,8 @@ public class AiService {
 
     public AiService(
             AiProvider aiProvider,
+            ExplainRequestGuard explainRequestGuard,
+            ExplainResultCache explainResultCache,
             AiCallLogRecorder aiCallLogRecorder,
             AiResponseValidator numericValidator,
             NarrativeFilter narrativeFilter,
@@ -108,6 +131,9 @@ public class AiService {
             @Value("${app.external.anthropic.total-budget:" + DEFAULT_TOTAL_BUDGET + "}")
             Duration totalBudget) {
         this.aiProvider = Objects.requireNonNull(aiProvider, "aiProvider");
+        this.explainRequestGuard =
+                Objects.requireNonNull(explainRequestGuard, "explainRequestGuard");
+        this.explainResultCache = Objects.requireNonNull(explainResultCache, "explainResultCache");
         this.aiCallLogRecorder = Objects.requireNonNull(aiCallLogRecorder, "aiCallLogRecorder");
         this.numericValidator = Objects.requireNonNull(numericValidator, "numericValidator");
         this.narrativeFilter = Objects.requireNonNull(narrativeFilter, "narrativeFilter");
@@ -126,6 +152,9 @@ public class AiService {
      * @param surface 서술 대상 화면 (예: {@code forecast_summary})
      * @param facts   엔진이 계산한 검증된 사실. AI 의 유일한 그라운딩 소스다(FR-AI-02)
      * @return 서술 결과 — 검증 실패해도 {@code null} 을 반환하지 않는다(H1)
+     * @throws com.divurve.common.exception.InvalidRequestException
+     *         {@code surface} 가 허용 화면이 아니거나 {@code facts} 가 상한을 넘었을 때 (400,
+     *         이슈 #139). 이 경우는 폴백하지 않는다 — 호출해 볼 가치가 없는 요청이다
      */
     @Transactional(readOnly = true)
     public ExplainOutcome explain(
@@ -134,11 +163,32 @@ public class AiService {
         Objects.requireNonNull(surface, "surface");
         Objects.requireNonNull(facts, "facts");
 
+        Instant startedAt = clock.instant();
+
+        // 상한·어휘 검사가 가장 먼저다(이슈 #139). 거절할 요청 때문에 설정 조회로 DB 를 치지 않고,
+        // 프롬프트에 실릴 크기를 프로바이더 호출 <b>전에</b> 확정한다 — 입력 크기가 곧 청구액이다.
+        // 여기서 나가는 InvalidRequestException 은 400 이며 폴백 대상이 아니다: 잘못된 요청은
+        // AI 실패가 아니므로 FR-AI-06 과 충돌하지 않는다.
+        String canonicalFacts = explainRequestGuard.canonicalize(surface, facts);
+
         SettingsView settings = userSettingsService.getSettings(userId);
         String explainLevel = settings.explainLevel();
         String explainDomain = settings.explainDomain();
 
-        Instant startedAt = clock.instant();
+        // 설명 선호까지 키에 넣는다 — 같은 facts 라도 explain_level·explain_domain 이 다르면
+        // 문장이 다르다. 이것을 빼면 처음 물어본 사용자의 어투가 모두에게 나간다.
+        String cacheKey = cacheKey(surface, explainLevel, explainDomain, canonicalFacts);
+        Optional<List<String>> cached = explainResultCache.find(cacheKey);
+        if (cached.isPresent()) {
+            // 검증값을 true 로 싣는 것은 상수를 채워 넣는 것이 아니다(이슈 #122 와 다른 경우다):
+            // 담긴 문장은 저장될 때 두 검사를 통과했고, 두 검사는 (sentences, facts) 만의 함수인데
+            // 그 둘을 키가 고정한다 — 지금 다시 돌려도 같은 결과다.
+            record(startedAt, userId, demo, surface, null, TokenUsage.NONE,
+                    AiCallOutcome.CACHE_HIT, null, null);
+            return new ExplainOutcome(cached.get(), explainLevel, explainDomain, false,
+                    true, true, List.of(), null);
+        }
+
         Instant deadline = startedAt.plus(totalBudget);
 
         // 호출 기록용 누적값 (이슈 #143). 재시도가 있으므로 사용량은 합산하고, 모델은 마지막으로
@@ -203,6 +253,8 @@ public class AiService {
             numericMatch = numericValidator.verify(sentences, facts);
             regimeDisclosed = regimeDisclosureCheck.verify(sentences, facts);
             if (numericMatch && regimeDisclosed) {
+                // 통과한 것만 담는다 — 폴백을 담으면 일시적 provider 장애가 TTL 동안 고정된다.
+                explainResultCache.put(cacheKey, sentences);
                 record(startedAt, userId, demo, surface, model, totalUsage,
                         AiCallOutcome.SUCCESS, null, null);
                 return new ExplainOutcome(
@@ -234,10 +286,13 @@ public class AiService {
      * 타지 않으므로 어댑터에 기록을 두면 정확히 그 경로가 사라진다. 그리고 ArchUnit 이
      * {@code @ExternalAdapter} → {@code @PersistenceAdapter} 를 막는다(CLAUDE.md 4장).
      *
-     * <p>{@code model} 이 {@code null} 이면 LLM 을 부르지 않은 요청이다 — 규약이 확정된 화면
-     * ({@code forecast_summary}) 밖은 템플릿으로 응답하고, {@code ANTHROPIC_ENABLED} 가 꺼진 기본
-     * 설정에서는 모든 서술이 그렇다. 그 행도 남긴다: 요청은 있었고 비용은 0 이었다는 사실이며,
-     * 이슈 #140 의 사용자별 쿼터는 LLM 호출 수가 아니라 <b>요청 수</b>를 세야 한다.
+     * <p>{@code model} 이 {@code null} 이면 <b>이 요청에서</b> LLM 을 부르지 않았다는 뜻이다 —
+     * 규약이 확정된 화면({@code forecast_summary}) 밖은 템플릿으로 응답하고,
+     * {@code ANTHROPIC_ENABLED} 가 꺼진 기본 설정에서는 모든 서술이 그렇고,
+     * <b>캐시 히트도 그렇다</b>(이슈 #139 — 담아 둔 문장을 만든 모델을 적으면 관리자 화면에서
+     * 토큰 0 짜리 호출로 보여 모델별 호출량이 부풀려진다. 히트임은 {@code outcome} 이 말한다).
+     * 그 행도 남긴다: 요청은 있었고 비용은 0 이었다는 사실이며, 이슈 #140 의 사용자별 쿼터는
+     * LLM 호출 수가 아니라 <b>요청 수</b>를 세야 한다.
      */
     private void record(
             Instant startedAt,
@@ -261,6 +316,23 @@ public class AiService {
                 fallbackReason == null ? null : fallbackReason.code(),
                 latencyMs,
                 errorSummary));
+    }
+
+    /**
+     * 요청을 캐시 키 하나로 접는다 (이슈 #139).
+     *
+     * <p><b>해시로 줄이지 않고 재료를 그대로 잇는다.</b> {@code facts} 는 상한이 4KB 라 500개를
+     * 담아도 키가 몇 MB 를 넘지 않고, 대신 <b>해시 충돌이 원리적으로 없다</b> — 충돌은 곧 남의
+     * 서술이 내 화면에 나가는 것이므로, 아낄 메모리와 바꿀 위험이 아니다.
+     *
+     * <p>{@code canonicalFacts} 는 {@link ExplainRequestGuard} 가 <b>키를 정렬해</b> 직렬화한
+     * 문자열이어야 한다. {@code Map} 순회 순서에 기대면 내용이 같은데 키가 달라져 캐시가 조용히
+     * 빗나가고, 캐시가 없는 것과 같은 상태가 지표에는 "히트율 0%" 로만 보인다.
+     */
+    private static String cacheKey(
+            String surface, String explainLevel, String explainDomain, String canonicalFacts) {
+        return surface + KEY_SEPARATOR + explainLevel + KEY_SEPARATOR + explainDomain
+                + KEY_SEPARATOR + canonicalFacts;
     }
 
     /**

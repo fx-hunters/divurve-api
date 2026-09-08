@@ -94,6 +94,20 @@ app:
       # 스케줄러 주기(Spring cron 표현식). 기본은 매시 정각.
       extract-cron: ${ANTHROPIC_EXTRACT_CRON:0 0 * * * *}
 
+  # AI 서술 입력 상한 (이슈 #139). facts 는 클라이언트가 보내는 임의 JSON 이고 프롬프트에 그대로
+  # 실리므로, 상한이 없으면 수 MB JSON 한 건으로 입력 토큰이 폭발한다 — 모델은 claude-opus-5 다.
+  # 값을 넘기면 호출 전에 400 이다. 새 화면의 facts 모양이 상한에 걸렸을 때 배포 없이 올릴 수
+  # 있도록 프로퍼티로 빼 뒀다. surface 화이트리스트는 코드(ExplainRequestGuard)에 있다 —
+  # 화면을 늘리는 것은 배포가 필요한 변경이다.
+  ai:
+    explain:
+      # 정규화된 facts JSON 의 최대 길이. 실제 화면은 200자 안쪽이라 스무 배 여유다.
+      max-facts-chars: ${AI_EXPLAIN_MAX_FACTS_CHARS:4096}
+      # facts 안의 전체 노드 수. 길이만으로는 못 막는 넓고 얕은 맵을 거른다.
+      max-facts-nodes: ${AI_EXPLAIN_MAX_FACTS_NODES:128}
+      # 컨테이너 중첩 단계. facts 자체가 1단계, interval_80 이 2단계다.
+      max-facts-depth: ${AI_EXPLAIN_MAX_FACTS_DEPTH:4}
+
   # 데모 계정 정리 (이슈 #138). 데모 세션은 회원가입 없이 무제한으로 발급되므로 정리하지 않으면
   # users 와 소유 테이블 전체에 더미 행이 무한히 쌓인다.
   demo:
