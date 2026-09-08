@@ -94,6 +94,20 @@ app:
       # 스케줄러 주기(Spring cron 표현식). 기본은 매시 정각.
       extract-cron: ${ANTHROPIC_EXTRACT_CRON:0 0 * * * *}
 
+  # 데모 계정 정리 (이슈 #138). 데모 세션은 회원가입 없이 무제한으로 발급되므로 정리하지 않으면
+  # users 와 소유 테이블 전체에 더미 행이 무한히 쌓인다.
+  demo:
+    cleanup:
+      # 데이터를 지우는 배치다 — 기본 꺼짐이며 명시적으로 켠다.
+      enabled: ${DEMO_CLEANUP_ENABLED:false}
+      # 스케줄 주기(Spring cron). 기본은 매일 04:10 (트래픽이 가장 적은 시각).
+      cron: ${DEMO_CLEANUP_CRON:0 10 4 * * *}
+      # 마지막 접속 이후 이 기간이 지난 데모 계정을 지운다. 액세스 토큰 TTL(30분)보다 충분히
+      # 길어야 시연 중 계정이 사라지지 않는다.
+      retention: ${DEMO_CLEANUP_RETENTION:P1D}
+      # 1회 실행 상한. 기준이 잘못 설정돼 대상이 폭증할 때 한 트랜잭션이 DB 를 붙잡는 것을 막는다.
+      batch-limit: ${DEMO_CLEANUP_BATCH_LIMIT:500}
+
 spring:
   application:
     name: divurve-api

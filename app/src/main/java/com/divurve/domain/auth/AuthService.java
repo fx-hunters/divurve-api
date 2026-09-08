@@ -153,7 +153,8 @@ public class AuthService {
      * @param refreshToken 리프레시 토큰
      * @param clientIp 접속 IP. 알 수 없으면 {@code null}
      * @return 새 액세스 토큰과 초기 설정 완료 여부 (refreshToken 필드는 입력 값과 동일)
-     * @throws UnauthorizedException 리프레시 토큰이 위조됐거나 만료됐을 때 (401)
+     * @throws UnauthorizedException 리프레시 토큰이 위조·만료됐거나, 그 사용자가 더 이상
+     *         존재하지 않을 때 (401) — 데모 정리(이슈 #138)로 지워진 계정이 그 경우다
      */
     @Transactional
     public AuthResult refreshAccessToken(String refreshToken, String clientIp) {
@@ -163,14 +164,23 @@ public class AuthService {
                 .orElseThrow(() -> new UnauthorizedException(INVALID_REFRESH_TOKEN_MESSAGE));
         AuthTokens newTokens = tokenProvider.issue(authPrincipal.userId(), authPrincipal.isDemo());
 
-        boolean onboarded = userRepository.findById(authPrincipal.userId())
-                .map(user -> {
-                    // 갱신도 접속이다 — 앱을 계속 쓰는 사용자는 로그인을 다시 하지 않으므로,
-                    // 갱신을 세지 않으면 "마지막 접속" 이 최초 로그인 시각에 멈춘다.
-                    user.recordLogin(Instant.now(clock), clientIp);
-                    return user.isOnboarded();
-                })
-                .orElse(false);
+        // 사용자가 없으면 401 이다 (이슈 #138). 예전에는 없는 사용자도 onboarded=false 로 통과해
+        // 새 액세스 토큰을 받았다 — 데모 정리로 계정이 지워진 뒤에도 리프레시 토큰 수명(14일)
+        // 동안 갱신이 계속 성공하고, 그 토큰으로 오는 요청은 401 이 아니라 "빈 데이터로 200" 이
+        // 된다. 인증은 통과하는데 소유 데이터만 전부 비어 있는 상태라, 화면에서는 로그아웃도
+        // 아니고 오류도 아닌 것으로 보여 원인 추적이 매우 어렵다.
+        //
+        // 조회는 이미 하고 있었으므로 추가 비용은 없다. 요청마다 사용자 존재를 확인하는 방식은
+        // 택하지 않았다 — 보존 기간(1일)이 액세스 토큰 TTL(30분)보다 길어 삭제된 계정의 액세스
+        // 토큰은 이미 만료돼 있고, 갱신만 막으면 새 토큰이 나가지 않는다.
+        User authenticatedRefreshUser = userRepository.findById(authPrincipal.userId())
+                .orElseThrow(() -> new UnauthorizedException(INVALID_REFRESH_TOKEN_MESSAGE));
+
+        // 갱신도 접속이다 — 앱을 계속 쓰는 사용자는 로그인을 다시 하지 않으므로,
+        // 갱신을 세지 않으면 "마지막 접속" 이 최초 로그인 시각에 멈춘다. 이 기록이
+        // 데모 정리(이슈 #138)의 판정 근거이기도 하다: 쓰고 있는 세션은 대상이 되지 않는다.
+        authenticatedRefreshUser.recordLogin(Instant.now(clock), clientIp);
+        boolean onboarded = authenticatedRefreshUser.isOnboarded();
 
         // 기존 리프레시 토큰 유지 (클라이언트는 리프레시 토큰 교체 필요 없음)
         return new AuthResult(
