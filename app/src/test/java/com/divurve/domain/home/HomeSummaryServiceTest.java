@@ -326,7 +326,8 @@ class HomeSummaryServiceTest {
         when(goalService.listByOwner(userId)).thenReturn(List.of());
 
         ApiResponse<HomeSummaryResponse> homeResponse = new HomeController(service).getSummary(userId);
-        ApiResponse<XrayResponse> xrayResponse = new XrayController(xrayService).getXray(userId);
+        ApiResponse<XrayResponse> xrayResponse =
+                new XrayController(xrayService, marketRegimeService).getXray(userId);
 
         assertThat(homeResponse.data().fxStatus().exposure())
                 .containsExactlyElementsOf(xrayResponse.data().exposure());

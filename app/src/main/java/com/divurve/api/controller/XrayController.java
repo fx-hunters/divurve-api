@@ -5,15 +5,20 @@ import com.divurve.api.dto.xray.AttributionResponse;
 import com.divurve.api.dto.xray.XrayResponse;
 import com.divurve.common.architecture.WebAdapter;
 import com.divurve.common.response.ApiResponse;
+import com.divurve.common.response.Meta;
+import com.divurve.domain.market.MarketRegimeService;
 import com.divurve.domain.xray.XrayService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -32,6 +37,8 @@ import org.springframework.web.bind.annotation.RestController;
 @Tag(name = "X-Ray", description = "외화 비중·통화 노출·집중도·손익 4분해")
 public class XrayController {
 
+    private static final Logger log = LoggerFactory.getLogger(XrayController.class);
+
     /** 4분해 항목의 화면 표시용 이름 (명세 §5.4 {@code components[].label}). */
     private static final Map<String, String> COMPONENT_LABELS = Map.of(
             "asset", "자산 가격 효과",
@@ -40,9 +47,12 @@ public class XrayController {
             "cost", "비용");
 
     private final XrayService xrayService;
+    private final MarketRegimeService marketRegimeService;
 
-    public XrayController(XrayService xrayService) {
+    public XrayController(XrayService xrayService, MarketRegimeService marketRegimeService) {
         this.xrayService = Objects.requireNonNull(xrayService, "xrayService is null");
+        this.marketRegimeService =
+                Objects.requireNonNull(marketRegimeService, "marketRegimeService is null");
     }
 
     @Operation(summary = "외화 비중·통화 노출·집중도·민감도",
@@ -67,6 +77,8 @@ public class XrayController {
                         snapshot.exposure().getOrDefault(entry.getKey(), 0.0)))
                 .toList();
 
+        Meta meta = Meta.mock(Instant.now()).withRegime(resolveRegimeCode());
+
         return ApiResponse.of(new XrayResponse(
                 snapshot.totalAssetKrw(),
                 snapshot.krwAssetKrw(),
@@ -83,9 +95,33 @@ public class XrayController {
                         snapshot.sensitivity1pct().totalKrw(),
                         snapshot.sensitivity1pct().byCurrency()),
                 snapshot.dayChangeKrw(),
-                snapshot.sampleData()));
+                snapshot.sampleData()), meta);
     }
 
+    /**
+     * 시장 국면 코드 (명세 §1.2 "시장 수치를 포함하는 응답에 동반", §5.3 예시의 {@code meta.regime}).
+     *
+     * <p>{@link MarketRegimeService#getRegime()} 는 5년치 환율 히스토리를 훑는 무거운 호출이다.
+     * 통화쌍별 조회 실패는 그 서비스 내부에서 이미 흡수하지만(해당 통화쌍만 국면 판정에서 빠짐),
+     * 예기치 못한 예외까지 이 엔드포인트의 본체인 자산 분해를 함께 죽이게 두지 않는다 —
+     * {@code regime} 은 부가 정보이므로 실패하면 조용히 생략한다. 전역 {@code non_null} 설정이
+     * {@code null} 이 되는 순간 meta 에서 키 자체를 뺀다.
+     */
+    private String resolveRegimeCode() {
+        try {
+            return marketRegimeService.getRegime().regime();
+        } catch (RuntimeException e) {
+            log.warn("시장 국면 조회에 실패해 /xray 응답에서 regime 을 생략합니다.", e);
+            return null;
+        }
+    }
+
+    /**
+     * {@code meta.regime} 은 여기 붙이지 않는다 — 명세 §5.4 예시가 {@code meta} 에 {@code sources} 까지만
+     * 싣고 {@code regime} 은 생략한다. 손익 4분해는 보유 종목의 확정된 수익률이지 시장 전반의 국면
+     * 판정과 같은 값이 아니므로, §1.2 "시장 수치를 포함하는 응답"에 §5.3(현재 노출·집중도)만큼
+     * 직접 해당한다고 보지 않는다.
+     */
     @Operation(summary = "손익 4분해",
             description = "요구사항 §4.6 `R_KRW = (1+R_asset)(1+R_fx) − 1` 에 거래비용을 더한 "
                     + "asset·fx·interaction·cost 네 항 고정 분해. 네 항의 합은 "
