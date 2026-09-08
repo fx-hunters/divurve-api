@@ -22,6 +22,7 @@ import com.divurve.domain.user.UserRepository;
 import com.divurve.domain.user.entity.User;
 import com.divurve.engine.concentration.ConcentrationCalculator;
 import com.divurve.engine.concentration.ConcentrationThresholdTable;
+import com.divurve.engine.diversification.DiversificationAdjustmentException;
 import com.divurve.engine.diversification.DiversificationSimulator;
 import com.divurve.engine.weight.QuoteUnitNormalizer;
 import com.divurve.engine.weight.WeightCalculator;
@@ -221,8 +222,11 @@ class FitServiceTest {
         when(depositRepository.findByOwner_Id(userId)).thenReturn(List.of());
 
         assertThatThrownBy(() -> service().preview(userId, "JPY", 0.10))
-                .isInstanceOf(InvalidRequestException.class)
-                .hasMessageContaining("외화자산이 없어");
+                .isInstanceOfSatisfying(InvalidRequestException.class, ex -> {
+                    assertThat(ex.getMessage()).contains("외화자산이 없어");
+                    // engine 의 EMPTY_PORTFOLIO 사유도 currency_code 로 매핑된다(이슈 #89).
+                    assertThat(ex.getField()).isEqualTo("currency_code");
+                });
     }
 
     @Test
@@ -237,6 +241,33 @@ class FitServiceTest {
         assertThatThrownBy(() -> service().preview(userId, "JPY", 0.90))
                 .isInstanceOf(InvalidRequestException.class)
                 .hasMessageContaining("범위");
+    }
+
+    /**
+     * 이슈 #89 — 실제 원인이 {@code currency_code}(GBP 미보유)인데 {@code field} 가
+     * {@code delta_share} 로 잘못 나가던 결함. {@link DiversificationAdjustmentException.Reason}
+     * 로 원인을 구분해 field 를 정확히 붙이는지 검증한다.
+     */
+    @Test
+    @DisplayName("포트폴리오에 없는 통화를 조정하려 하면 field 는 currency_code 다")
+    void 없는_통화면_field는_currency_code다() {
+        givenUser();
+        givenFixturePortfolio();
+
+        assertThatThrownBy(() -> service().preview(userId, "GBP", 0.10))
+                .isInstanceOfSatisfying(InvalidRequestException.class,
+                        ex -> assertThat(ex.getField()).isEqualTo("currency_code"));
+    }
+
+    @Test
+    @DisplayName("조정 후 비중이 범위를 벗어나면 field 는 delta_share 다")
+    void 비중_범위_초과면_field는_delta_share다() {
+        givenUser();
+        givenFixturePortfolio();
+
+        assertThatThrownBy(() -> service().preview(userId, "JPY", 0.90))
+                .isInstanceOfSatisfying(InvalidRequestException.class,
+                        ex -> assertThat(ex.getField()).isEqualTo("delta_share"));
     }
 
     @Test
