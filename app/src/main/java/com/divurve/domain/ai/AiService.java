@@ -8,6 +8,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
@@ -122,10 +123,18 @@ public class AiService {
 
         Instant deadline = clock.instant().plus(TOTAL_BUDGET);
 
+        // 검증 단계까지 도달한 마지막 시도의 측정값. 한 번도 도달하지 못했으면 null 로 남겨
+        // "측정되지 않았다" 를 그대로 응답에 싣는다(이슈 #122) — 폴백에 true 를 채워 넣지 않는다.
+        Boolean numericMatch = null;
+        Boolean regimeDisclosed = null;
+        List<String> blockedPhrases = List.of();
+        FallbackReason fallbackReason = null;
+
         for (int attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
             if (attempt > 0 && !clock.instant().isBefore(deadline)) {
                 log.warn("AI 서술 예산({}초) 소진 — 재시도 없이 폴백한다. surface={}",
                         TOTAL_BUDGET_SECONDS, surface);
+                fallbackReason = FallbackReason.BUDGET_EXHAUSTED;
                 break;
             }
 
@@ -137,8 +146,12 @@ public class AiService {
             } catch (RuntimeException e) {
                 // 타임아웃·429·5xx·응답 형식 위반. 재시도해도 같은 이유로 실패할 가능성이 크고,
                 // 남은 예산을 쓰는 동안 사용자는 계속 기다린다 — 즉시 폴백한다(FR-AI-06).
-                log.warn("AI 서술 호출 실패 — 폴백한다. surface={} attempt={} cause={}",
-                        surface, attempt, e.toString());
+                //
+                // 예외를 마지막 인자로 넘겨 <b>cause 체인 전체</b>를 남긴다(이슈 #122). e.toString()
+                // 만 찍으면 "AnthropicIoException: Request failed" 에서 끊겨 타임아웃인지 DNS
+                // 실패인지 구분할 수 없다 — 대응이 완전히 다른데도.
+                log.warn("AI 서술 호출 실패 — 폴백한다. surface={} attempt={}", surface, attempt, e);
+                fallbackReason = FallbackReason.PROVIDER_ERROR;
                 break;
             }
 
@@ -146,42 +159,88 @@ public class AiService {
             //  audit_logs(action='ai_explained') 에 남긴다(ERD v3.0 §10). user_id 는 위 파라미터로 이미 있다.
             //  마스킹 범위가 확정될 때까지는 어댑터가 페이로드 없이 호출 메타만 로그로 남긴다(이슈 #73).
 
-            List<String> blockedPhrases = narrativeFilter.detect(String.join(" ", sentences));
-            if (!blockedPhrases.isEmpty()) {
+            List<String> detected = narrativeFilter.detect(String.join(" ", sentences));
+            if (!detected.isEmpty()) {
                 // §5 4단계는 "차단"이지 "재생성"이 아니다 — 다시 물어도 같은 어조가 나올 뿐이다.
                 log.warn("AI 서술에서 금지 표현 발견 — 재시도 없이 폴백한다. surface={} count={}",
-                        surface, blockedPhrases.size());
+                        surface, detected.size());
+                // 검출된 표현을 그대로 응답에 싣는다(이슈 #122). 빈 목록으로 내보내면 무엇에
+                // 걸렸는지가 사라져, 차단한 표현을 응답이 오히려 숨기게 된다.
+                blockedPhrases = detected;
+                fallbackReason = FallbackReason.BLOCKED_PHRASES;
                 break;
             }
 
-            boolean numericMatch = numericValidator.verify(sentences, facts);
-            boolean regimeDisclosed = regimeDisclosureCheck.verify(sentences, facts);
+            numericMatch = numericValidator.verify(sentences, facts);
+            regimeDisclosed = regimeDisclosureCheck.verify(sentences, facts);
             if (numericMatch && regimeDisclosed) {
-                return new ExplainOutcome(sentences, explainLevel, explainDomain, false, true, List.of());
+                return new ExplainOutcome(
+                        sentences, explainLevel, explainDomain, false, true, true, List.of(), null);
             }
             // 수치 날조(§5 3단계) 또는 급변 구간 안내 누락(§5.1) — 재생성할 여지가 있으므로 재시도한다.
+            // 이 경로는 이슈 #122 이전까지 로그도 응답 단서도 없어 유일하게 완전히 무음이었다.
+            log.warn("AI 서술 검증 실패 — 재시도한다. surface={} attempt={} numericMatch={} "
+                            + "regimeDisclosed={}", surface, attempt, numericMatch, regimeDisclosed);
+            fallbackReason = FallbackReason.VERIFICATION_FAILED;
         }
 
         // 폐기하고 고정 템플릿으로 폴백한다. 200 을 유지한다(FR-AI-06, NFR-AI-03).
-        return new ExplainOutcome(FALLBACK_SENTENCES, explainLevel, explainDomain, true, true, List.of());
+        return new ExplainOutcome(FALLBACK_SENTENCES, explainLevel, explainDomain, true,
+                numericMatch, regimeDisclosed, blockedPhrases, fallbackReason);
+    }
+
+    /**
+     * 폴백에 이른 사유 (이슈 #122).
+     *
+     * <p>폴백 경로는 넷인데 그동안 <b>응답이 전부 같은 값으로 수렴</b>해 어느 경로였는지 알 수
+     * 없었다. 배포된 환경에서 폴백 원인을 찾으려면 서버 로그를 뒤지는 수밖에 없었고, 그중 검증
+     * 실패 경로는 로그조차 없었다. 이 값이 그 넷을 응답에서 가른다.
+     */
+    public enum FallbackReason {
+
+        /** 어댑터 호출이 예외로 끝났다 — 타임아웃·429·5xx·응답 형식 위반. */
+        PROVIDER_ERROR,
+
+        /** 금지 표현이 검출됐다. 검출된 표현은 {@code blockedPhrases} 에 그대로 담긴다. */
+        BLOCKED_PHRASES,
+
+        /** 총예산({@link AiService#TOTAL_BUDGET})이 소진돼 재시도를 생략했다. */
+        BUDGET_EXHAUSTED,
+
+        /** 수치 대조 또는 급변 구간 고지 검사에 걸렸다. 어느 쪽인지는 두 측정값이 말한다. */
+        VERIFICATION_FAILED;
+
+        /** API 응답에 싣는 snake_case 코드 — DB 컬럼·응답 필드와 같은 표기를 쓴다(§5 네이밍). */
+        public String code() {
+            return name().toLowerCase(Locale.ROOT);
+        }
     }
 
     /**
      * 서술 결과 (명세 §5.12 {@code explanation} + {@code verification} 의 원본).
      *
-     * @param sentences      서술 문장 목록. {@code fallback} 이면 고정 템플릿
-     * @param explainLevel   반영된 설명 선호
-     * @param explainDomain  반영된 익숙한 설명 분야
-     * @param fallback       검증 실패로 고정 템플릿을 냈는지
-     * @param numericMatch   최종 반환된 문장의 수치가 {@code facts} 와 일치하는지
-     * @param blockedPhrases 최종 반환된 문장에서 발견된 금지 표현(폴백이면 항상 빈 목록)
+     * <p><b>검증값은 측정한 것만 담는다</b>(이슈 #122). 폴백 응답이 {@code numericMatch=true} 를
+     * 상수로 실어 "LLM 출력이 검증을 통과했다" 로 읽히게 하던 것을 없앴다 — 통과한 출력은 애초에
+     * 존재하지 않았다. 검증 단계에 도달하지 못한 경로에서는 {@code null} 이다.
+     *
+     * @param sentences       서술 문장 목록. {@code fallback} 이면 고정 템플릿
+     * @param explainLevel    반영된 설명 선호
+     * @param explainDomain   반영된 익숙한 설명 분야
+     * @param fallback        검증 실패로 고정 템플릿을 냈는지
+     * @param numericMatch    마지막으로 검증 단계까지 간 시도의 수치 대조 결과.
+     *                        거기까지 가지 못했으면(호출 실패 등) {@code null}
+     * @param regimeDisclosed 같은 시도의 급변 구간 고지 검사 결과. 위와 같은 규칙으로 {@code null}
+     * @param blockedPhrases  검출된 금지 표현. 그 경로가 아니면 빈 목록
+     * @param fallbackReason  폴백 사유. {@code fallback} 이면 항상 non-null, 성공이면 {@code null}
      */
     public record ExplainOutcome(
             List<String> sentences,
             String explainLevel,
             String explainDomain,
             boolean fallback,
-            boolean numericMatch,
-            List<String> blockedPhrases) {
+            Boolean numericMatch,
+            Boolean regimeDisclosed,
+            List<String> blockedPhrases,
+            FallbackReason fallbackReason) {
     }
 }

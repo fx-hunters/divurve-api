@@ -11,6 +11,7 @@ import static org.mockito.Mockito.when;
 
 import com.divurve.common.exception.InvalidRequestException;
 import com.divurve.domain.port.EconEventExtractor;
+import java.net.SocketTimeoutException;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -24,8 +25,9 @@ import org.mockito.ArgumentCaptor;
 /**
  * {@link EconEventExtractPreviewService} — 저장 없는 추출 미리보기.
  *
- * <p>고정하는 것은 셋이다: 저장하지 않는가, 거부된 후보도 사유와 함께 나오는가,
- * 어떤 추출기가 응답했는지 드러나는가(0건의 원인을 가르는 유일한 단서).
+ * <p>고정하는 것은 넷이다: 저장하지 않는가, 거부된 후보도 사유와 함께 나오는가,
+ * 어떤 추출기가 응답했는지 드러나는가(0건의 원인을 가르는 유일한 단서),
+ * 추출기가 터졌을 때 500 이 아니라 사유가 값으로 나오는가(이슈 #122).
  */
 @DisplayName("EconEventExtractPreviewService")
 class EconEventExtractPreviewServiceTest {
@@ -64,6 +66,7 @@ class EconEventExtractPreviewServiceTest {
         EconEventExtractPreviewService.PreviewResult result = service.preview("https://x", TEXT);
 
         assertThat(result.previewedAt()).isEqualTo(Instant.now(CLOCK));
+        assertThat(result.failureReason()).isNull();
         assertThat(result.candidates()).singleElement().satisfies(c -> {
             assertThat(c.eventDate()).isEqualTo("2026-09-18");
             assertThat(c.region()).isEqualTo("US");
@@ -123,6 +126,36 @@ class EconEventExtractPreviewServiceTest {
 
         assertThat(result.extractor()).isEqualTo(noop.getClass().getSimpleName());
         assertThat(result.candidates()).isEmpty();
+        // 0건인데 실패 사유가 없다 — "뽑을 게 없었다" 쪽이다.
+        assertThat(result.failureReason()).isNull();
+    }
+
+    @Test
+    @DisplayName("추출기가 터지면 500 이 아니라 사유를 값으로 돌려준다 — 형제 엔드포인트와 같은 방식")
+    void preview_ExtractorThrows_ReportsReasonAsValue() {
+        when(extractor.extract(any()))
+                .thenThrow(new IllegalStateException("응답이 4문장이 아니다"));
+
+        EconEventExtractPreviewService.PreviewResult result = service.preview("https://x", TEXT);
+
+        assertThat(result.candidates()).isEmpty();
+        assertThat(result.extractor()).isNotBlank();
+        assertThat(result.previewedAt()).isEqualTo(Instant.now(CLOCK));
+        assertThat(result.failureReason())
+                .isEqualTo("IllegalStateException: 응답이 4문장이 아니다");
+    }
+
+    @Test
+    @DisplayName("실패 사유에 근본 원인을 붙인다 — 타임아웃과 연결 실패를 구분해야 한다")
+    void preview_ExtractorThrows_IncludesRootCause() {
+        when(extractor.extract(any())).thenThrow(new IllegalStateException(
+                "Request failed", new SocketTimeoutException("read timed out")));
+
+        EconEventExtractPreviewService.PreviewResult result = service.preview(null, TEXT);
+
+        assertThat(result.failureReason()).isEqualTo(
+                "IllegalStateException: Request failed"
+                        + " (근본 원인: SocketTimeoutException: read timed out)");
     }
 
     @Test

@@ -413,7 +413,8 @@ class AdminControllerTest {
                             "NoOpEconEventExtractor",
                             List.of(new EconEventExtractPreviewService.CandidateResult(
                                     "어제", "MARS", "제목", 5, false, "허용되지 않는 region")),
-                            Instant.now(CLOCK)));
+                            Instant.now(CLOCK),
+                            null));
 
             ApiResponse<AdminExtractPreviewResponse> response =
                     new AdminAiController(econEventExtractPreviewService).extractPreview(
@@ -431,6 +432,26 @@ class AdminControllerTest {
                 assertThat(candidate.valid()).isFalse();
                 assertThat(candidate.rejectReason()).isEqualTo("허용되지 않는 region");
             });
+            assertThat(response.data().failureReason()).isNull();
+        }
+
+        @Test
+        @DisplayName("추출기 호출이 실패하면 사유를 응답 값으로 내보낸다 — 500 이 아니다 (이슈 #122)")
+        void extractPreview_ExposesFailureReason() {
+            when(econEventExtractPreviewService.preview(null, "원문")).thenReturn(
+                    new EconEventExtractPreviewService.PreviewResult(
+                            "ClaudeEconEventExtractor",
+                            List.of(),
+                            Instant.now(CLOCK),
+                            "AiResponseFormatException: 응답이 JSON 배열이 아니다"));
+
+            ApiResponse<AdminExtractPreviewResponse> response =
+                    new AdminAiController(econEventExtractPreviewService).extractPreview(
+                            ADMIN_ID, new AdminExtractPreviewRequest(null, "원문"));
+
+            assertThat(response.data().count()).isZero();
+            assertThat(response.data().failureReason())
+                    .isEqualTo("AiResponseFormatException: 응답이 JSON 배열이 아니다");
         }
     }
 }
