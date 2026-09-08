@@ -74,6 +74,38 @@ public class EconEvent {
             EconEventSourceKind.AI_EXTRACTED);
     }
 
+    /**
+     * 공식 캘린더가 공표한 일정을 생성한다({@link EconEventSourceKind#OFFICIAL_PARSER}, 이슈 #163).
+     * LLM 을 거치지 않으므로 원문 대조(제약 2)가 필요 없다 — 기관이 공표한 날짜 그대로다.
+     */
+    public static EconEvent official(LocalDate eventDate, String region, String title,
+            short impact, String sourceUrl, Instant fetchedAt) {
+        return new EconEvent(eventDate, region, title, impact, sourceUrl, fetchedAt,
+            EconEventSourceKind.OFFICIAL_PARSER);
+    }
+
+    /**
+     * 이미 저장된 행을 공식 출처로 승격한다 (이슈 #163).
+     *
+     * <p><b>왜 필요한가</b> — 적재는 {@code (event_date, region, title)} 이 이미 있으면 건너뛴다.
+     * 그대로 두면 AI 추출분이나 시연용 행이 먼저 자리를 잡았다는 이유로 <b>공식 데이터가
+     * 버려진다</b>. 신뢰도가 낮은 쪽이 이기는 구조라 뒤집는다.
+     *
+     * <p>이미 {@code OFFICIAL_PARSER} 인 행에는 호출하지 않는다 — 같은 신뢰도끼리는 먼저 온
+     * 것을 남긴다(호출자가 판단한다).
+     */
+    public void promoteToOfficial(short impact, String sourceUrl, Instant fetchedAt) {
+        this.impact = impact;
+        this.sourceUrl = sourceUrl;
+        this.fetchedAt = Objects.requireNonNull(fetchedAt, "fetchedAt");
+        this.sourceKind = EconEventSourceKind.OFFICIAL_PARSER.name();
+    }
+
+    /** 이 행이 공식 출처인가 (이슈 #163 — 승격 대상 판정). */
+    public boolean isOfficial() {
+        return EconEventSourceKind.OFFICIAL_PARSER.name().equals(sourceKind);
+    }
+
     public UUID getId() {
         return id;
     }

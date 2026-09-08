@@ -63,6 +63,12 @@ app:
     fred:
       base-url: https://api.stlouisfed.org/fred
       api-key: ${FRED_API_KEY:}
+      # 공식 캘린더 적재 배치 (이슈 #163). 기본 꺼짐 — 켜면 FRED releases/dates 를 읽어
+      # econ_events 를 OFFICIAL_PARSER 로 채운다. api-key 가 비어 있으면 배치가 실패하지만
+      # 예외를 삼키므로 서비스 응답에는 영향이 없다.
+      calendar-schedule-enabled: ${FRED_CALENDAR_SCHEDULE_ENABLED:false}
+      # 확정 공표 일정이라 자주 볼 이유가 없다. 기본은 매일 04:10.
+      calendar-cron: ${FRED_CALENDAR_CRON:0 10 4 * * *}
     # AI 서술(narrate) 경로 — Anthropic Claude (이슈 #73, 값 노출은 이슈 #123).
     # enabled=false(기본)면 ClaudeAiProvider 빈이 만들어지지 않고 MockAiProvider 의 템플릿 문장이 나간다.
     # true 로 켤 때 api-key 가 비어 있으면 기동 시점에 실패한다 — 켰다고 믿는 채로 템플릿이 나가는 것보다 낫다.
