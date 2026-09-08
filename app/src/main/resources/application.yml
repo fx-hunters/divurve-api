@@ -135,3 +135,26 @@ springdoc:
     path: /swagger-ui/index.html
   api-docs:
     path: /v3/api-docs
+
+
+# 헬스체크 (이슈 #145) — Render 무료 티어 슬립 방지 핑의 대상.
+# health 만 노출한다. metrics·env·beans 등은 인증 없이 열리면 내부 구조가 그대로 새어나가고,
+# 이 레포는 Spring Security 를 쓰지 않아 actuator 경로에 인증을 걸 수단이 없다
+# (WebAuthConfig 의 인터셉터는 /api/** 에만 붙는다).
+#
+# probes 를 켜면 health 아래에 liveness·readiness 그룹이 생긴다.
+#   /actuator/health            전체 — DB 포함. DB 가 죽으면 503
+#   /actuator/health/liveness   "JVM 이 살아 있다" 만 — 외부 의존성 미포함, 항상 200
+# 슬립 방지 워크플로는 liveness 를 찌른다. 목적이 "인스턴스를 깨우는 것"이라서,
+# DB 장애로 503 이 나면 핑은 성공했는데 워크플로만 빨간불이 되는 오탐이 된다.
+# DB 를 포함한 진짜 상태 확인이 필요하면 /actuator/health 를 따로 본다.
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true

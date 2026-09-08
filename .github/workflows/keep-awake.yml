@@ -1,0 +1,46 @@
+name: Keep Render Server Awake
+
+# Render 무료 요금제는 15분간 요청이 없으면 인스턴스를 슬립시킨다.
+# 다음 요청이 콜드 스타트를 태워 프론트 통합·시연 중 첫 호출이 수십 초 걸리는 것을 막는다.
+#
+# 주기를 10분으로 잡은 이유: GitHub Actions 의 schedule 은 정시 실행을 보장하지 않고
+# 혼잡 시간대엔 수 분 밀린다. 15분 임계에 5분 버퍼를 둬야 한 번 밀려도 슬립하지 않는다.
+#
+# 주의 1: 무료 인스턴스 시간은 계정당 월 750h 다. 24/7 로 깨워두면 약 730h 를 쓴다.
+#         무료 서비스를 추가하기 전에 잔여량을 반드시 확인한다.
+# 주의 2: GitHub 은 60일간 커밋이 없는 레포의 scheduled workflow 를 자동 비활성화한다.
+on:
+  schedule:
+    - cron: '*/10 * * * *'   # 매시 0,10,20,30,40,50분 (cron 은 항상 UTC)
+  workflow_dispatch:         # Actions 탭에서 수동 실행 (테스트용)
+
+permissions: {}              # 이 워크플로는 GITHUB_TOKEN 이 필요 없다
+
+concurrency:
+  # 콜드 스타트로 한 회차가 길어졌을 때 다음 회차와 겹쳐 도는 것을 막는다.
+  group: keep-awake
+  cancel-in-progress: false
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ping liveness endpoint
+        env:
+          # liveness 는 외부 의존성을 보지 않는다 — DB 장애로 인한 오탐을 피하기 위해서다.
+          # DB 까지 포함한 상태 확인은 /actuator/health 를 따로 본다.
+          TARGET: 'https://divurve-api.onrender.com/actuator/health/liveness'
+        run: |
+          set -uo pipefail
+          # curl 은 HTTP 4xx/5xx 를 받아도 exit 0 이다. http_code 를 직접 검사해야
+          # 서버가 죽었을 때 워크플로가 초록불로 남는 것을 막을 수 있다.
+          code=$(curl -sS -o /dev/null -w '%{http_code}' \
+                   --max-time 120 --retry 2 --retry-delay 30 --retry-connrefused \
+                   "$TARGET") || code=000
+          echo "HTTP $code — $TARGET"
+          case "$code" in
+            2*|3*) echo "서버 응답 정상 (슬립 방지 성공)" ;;
+            000)   echo "::error::핑 실패 — 응답 없음(네트워크·타임아웃)"; exit 1 ;;
+            *)     echo "::error::핑 실패 — HTTP $code"; exit 1 ;;
+          esac

@@ -12,10 +12,15 @@ import com.divurve.engine.cost.CostCalculator;
 import com.divurve.engine.volatility.RegimeClassifier;
 import com.divurve.engine.simulate.MonteCarloSimulator;
 import com.divurve.engine.split.SplitVarianceReducer;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.ApplicationContext;
@@ -59,7 +64,10 @@ class ApplicationContextSmokeTest {
     @Autowired
     private ApplicationContext context;
 
+    // actuator(이슈 #145)가 controllerEndpointHandlerMapping 을 등록하면서 이 타입의 후보가 둘이 됐다.
+    // 검증 대상은 @RestController 매핑이므로 기본 빈을 이름으로 고정한다.
     @Autowired
+    @Qualifier("requestMappingHandlerMapping")
     private RequestMappingHandlerMapping handlerMapping;
 
     @Autowired
@@ -123,5 +131,70 @@ class ApplicationContextSmokeTest {
         }));
 
         assertThat(노출된_userId_파라미터).isEmpty();
+    }
+
+    /**
+     * 슬립 방지 워크플로가 찌르는 경로가 앱에 실제로 존재하는지 확인한다 (이슈 #145).
+     *
+     * <p>이 테스트가 존재하는 이유 — 최초 초안이 {@code /swagger-ui/swagger-ui/index.html} 라는
+     * 중복 경로를 찌르고 있었는데, springdoc 의 webjar 정적 리소스에 <b>우연히</b> 걸려 200 이 나왔다.
+     * 게다가 초안의 {@code curl ... || echo} 는 HTTP 404 에도 exit 0 이라(curl 은 상태 코드로 실패하지
+     * 않는다) 경로가 깨져도 워크플로는 영원히 초록불이었을 것이다. 즉 "핑이 도착하지 않는데 아무도
+     * 모르는" 상태가 만들어진다 — 이 테스트는 그 조합을 CI 에서 잡는다.
+     *
+     * <p>워크플로 파일에서 URL 을 직접 읽어 검증하므로, 나중에 누가 경로를 바꾸면 여기서 걸린다.
+     */
+    @Test
+    void 슬립_방지_워크플로의_핑_경로가_실제로_응답한다() throws Exception {
+        // 테스트 작업 디렉터리는 app/ 이므로 레포 루트는 한 단계 위다 (MigrationVersionTest 와 동일).
+        Path 워크플로 = Path.of("..", ".github", "workflows", "keep-awake.yml");
+        assertThat(Files.exists(워크플로))
+                .as("keep-awake.yml 이 있어야 한다")
+                .isTrue();
+
+        Matcher m = Pattern.compile("https://divurve-api\\.onrender\\.com(/\\S*)")
+                .matcher(Files.readString(워크플로));
+        assertThat(m.find())
+                .as("워크플로에서 핑 대상 URL 을 찾지 못했다")
+                .isTrue();
+
+        String 핑_경로 = m.group(1).replaceAll("['\"]+$", "");
+        mockMvc.perform(get(핑_경로)).andExpect(status().isOk());
+    }
+
+    /**
+     * actuator 가 health 외의 엔드포인트를 열지 않는지 확인한다 (이슈 #145).
+     *
+     * <p>이 레포는 Spring Security 를 쓰지 않고 {@code WebAuthConfig} 의 인터셉터는 {@code /api/**}
+     * 에만 붙는다 — actuator 경로에 인증을 걸 수단이 없다. 따라서 노출하는 순간 그대로 공개된다.
+     * {@code env} 는 JWT 시크릿·DB 접속 정보가, {@code beans}·{@code mappings} 는 내부 구조가 샌다.
+     */
+    @Test
+    void actuator_는_health_외의_엔드포인트를_노출하지_않는다() throws Exception {
+        for (String 열리면_안_되는_경로 : List.of(
+                "/actuator/env", "/actuator/beans", "/actuator/metrics",
+                "/actuator/mappings", "/actuator/configprops", "/actuator/loggers")) {
+            mockMvc.perform(get(열리면_안_되는_경로))
+                    .andExpect(status().isNotFound());
+        }
+    }
+
+    /**
+     * health 응답이 상세 정보를 담지 않는지 확인한다 (이슈 #145).
+     *
+     * <p>{@code show-details: never} 가 풀리면 DB 접속 URL·디스크 경로 등이 인증 없이 노출된다.
+     */
+    @Test
+    void health_응답이_상세_정보를_노출하지_않는다() throws Exception {
+        String 응답 = mockMvc.perform(get("/actuator/health"))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        JsonNode health = new ObjectMapper().readTree(응답);
+        assertThat(health.path("status").asText()).isEqualTo("UP");
+        assertThat(health.has("components")).as("components 가 노출되면 안 된다").isFalse();
+        assertThat(health.has("details")).as("details 가 노출되면 안 된다").isFalse();
     }
 }
