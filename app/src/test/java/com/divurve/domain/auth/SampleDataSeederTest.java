@@ -10,6 +10,7 @@ import com.divurve.domain.auth.DemoSampleData.DepositSample;
 import com.divurve.domain.auth.DemoSampleData.GoalSample;
 import com.divurve.domain.auth.DemoSampleData.HoldingSample;
 import com.divurve.domain.auth.DemoSampleData.KrwAssetSample;
+import com.divurve.domain.auth.DemoSampleData.NotificationSample;
 import com.divurve.domain.goal.GoalRepository;
 import com.divurve.domain.goal.entity.Goal;
 import com.divurve.domain.holding.DepositRepository;
@@ -18,7 +19,10 @@ import com.divurve.domain.holding.KrwAssetRepository;
 import com.divurve.domain.holding.entity.Deposit;
 import com.divurve.domain.holding.entity.Holding;
 import com.divurve.domain.holding.entity.KrwAsset;
+import com.divurve.domain.notification.NotificationRepository;
+import com.divurve.domain.notification.entity.Notification;
 import com.divurve.domain.settings.RiskProfileService;
+import com.divurve.domain.stress.StressRunService;
 import com.divurve.domain.user.UserRepository;
 import com.divurve.domain.user.entity.User;
 import java.time.Clock;
@@ -59,6 +63,10 @@ class SampleDataSeederTest {
     private UserRepository userRepository;
     @Mock
     private RiskProfileService riskProfileService;
+    @Mock
+    private StressRunService stressRunService;
+    @Mock
+    private NotificationRepository notificationRepository;
 
     private final User owner = User.create("me@divurve.com", "나", "hash");
 
@@ -73,6 +81,8 @@ class SampleDataSeederTest {
                 goalRepository,
                 userRepository,
                 riskProfileService,
+                stressRunService,
+                notificationRepository,
                 Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
@@ -177,6 +187,31 @@ class SampleDataSeederTest {
 
         // 유형·점수·기준선을 직접 박지 않는다 — 산출은 RiskProfileScorer 의 몫이다(CLAUDE.md 1장).
         verify(riskProfileService).submitSimple(any(), eq(DemoSampleData.RISK_PROFILE_ANSWERS));
+    }
+
+    @Test
+    void 스트레스_실행_이력은_마스터_시나리오_코드로_실제_계산을_위임한다() {
+        seeder.seed(owner);
+
+        // 효과 3항을 직접 박지 않는다 — 계산은 StressRunService 의 몫이다(CLAUDE.md 1장, 이슈 #97).
+        for (String scenarioCode : DemoSampleData.STRESS_RUN_SCENARIO_CODES) {
+            verify(stressRunService).run(owner.getId(), scenarioCode);
+        }
+    }
+
+    @Test
+    void 알림_1건이_정의대로_복제된다() {
+        seeder.seed(owner);
+
+        ArgumentCaptor<Notification> captor = ArgumentCaptor.forClass(Notification.class);
+        verify(notificationRepository).save(captor.capture());
+        Notification saved = captor.getValue();
+        NotificationSample sample = DemoSampleData.NOTIFICATION;
+
+        assertThat(saved.getKind()).isEqualTo(sample.kind());
+        assertThat(saved.getTitle()).isEqualTo(sample.title());
+        assertThat(saved.getBody()).isEqualTo(sample.body());
+        assertThat(saved.isRead()).isFalse();
     }
 
 }

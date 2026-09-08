@@ -33,7 +33,8 @@ import java.util.Map;
  * <p><b>수치를 여기 적어도 되는 이유</b> — 이것은 계산 결과가 아니라 사용자가 입력했을 법한 <b>입력값</b>이다.
  * 평가액·비중·집중도·플랜 같은 파생 수치는 여전히 {@code engine} 의 결정론적 계산이 만든다(CLAUDE.md 1장).
  * 같은 이유로 위험성향도 유형을 직접 박지 않고 {@link #RISK_PROFILE_ANSWERS 진단 응답}만 두어,
- * {@code RiskProfileScorer} 가 유형·점수·기준선을 산출하게 한다.
+ * {@code RiskProfileScorer} 가 유형·점수·기준선을 산출하게 한다. {@link #STRESS_RUN_SCENARIO_CODES} 도
+ * 마찬가지다 — 시나리오 코드(입력)만 두고, 효과 3항(파생 수치)은 {@code StressRunService} 가 계산한다.
  */
 public final class DemoSampleData {
 
@@ -95,6 +96,26 @@ public final class DemoSampleData {
      */
     public static final Map<String, String> RISK_PROFILE_ANSWERS = Map.of("q1", "B", "q2", "C", "q3", "B");
 
+    /**
+     * 데모 유저가 실행한 스트레스 시나리오 이력(이슈 #97, {@code GET /stress/runs} 데모 화면 검증용).
+     *
+     * <p>{@code V11__stress.sql} 이 시드하는 마스터 시나리오 2종만 가리킨다 — 새 시나리오를 만들지 않는다.
+     * 여기서 정하는 것은 "무엇을 실행했는지"라는 <b>입력</b>뿐이고, 실행 결과(효과 3항)는 시드하지 않는다 —
+     * {@code SampleDataSeeder} 가 이미 시드된 보유 자산으로 {@code StressRunService} 를 실제로 호출해
+     * 결정론적으로 계산하게 한다(CLAUDE.md 1장).
+     */
+    public static final List<String> STRESS_RUN_SCENARIO_CODES =
+            List.of("equity_down_krw_weak", "equity_down_krw_strong");
+
+    /**
+     * 알림 1건(이슈 #97). {@code kind} 는 {@code target_zone} — 목표 통화 보유액이 목표의 약 70%인
+     * 데모 시나리오({@link #GOAL})와 내용이 맞아떨어지도록 골랐다. 다른 알림 종류를 시드하지 않는 이유는
+     * "빈 알림함도 유효한 상태"(FR-CM-09)를 데모가 과장하지 않기 위해서다 — 데모조차 알림이 여러 건
+     * 쌓인 것처럼 보이면 실사용자의 빈 상태가 비정상처럼 읽힌다.
+     */
+    public static final NotificationSample NOTIFICATION = new NotificationSample(
+            "target_zone", "목표 구간에 가까워지고 있어요", "미국 대학원 학비 목표가 목표 금액의 약 70%에 도달했습니다.");
+
     private DemoSampleData() {
     }
 
@@ -150,6 +171,16 @@ public final class DemoSampleData {
      * @param amountKrw 금액 (원)
      */
     public record KrwAssetSample(String kind, String label, long amountKrw) {
+    }
+
+    /**
+     * 알림 샘플.
+     *
+     * @param kind  알림 종류 — {@code Notification#KINDS} 중 하나 (V24 마이그레이션 CHECK 와 일치)
+     * @param title 제목
+     * @param body  본문
+     */
+    public record NotificationSample(String kind, String title, String body) {
     }
 
     /**
