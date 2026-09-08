@@ -653,17 +653,42 @@ v1의 안전모드 조회 엔드포인트를 대체한다. **상태를 알리되
       "explain_domain": "dev",
       "fallback": false
     },
-    "verification": { "numeric_match": true, "blocked_phrases": [] }
+    "verification": {
+      "numeric_match": true,
+      "regime_disclosed": true,
+      "blocked_phrases": [],
+      "fallback_reason": null
+    }
   },
   "meta": { "as_of": "2026-09-01T15:30:00Z", "data_state": "mock", "sources": [] }
 }
 ```
+
+#### `verification` — 폴백했다면 **왜** 인가 (이슈 #122)
+
+폴백에 이르는 경로는 넷이고, `fallback_reason` 이 그 넷을 가른다. 이 필드가 없던 동안에는 네 경로가
+모두 `numeric_match: true`, `blocked_phrases: []` 로 수렴해 응답만으로는 원인을 알 수 없었다.
+
+| `fallback_reason` | 무슨 일이 있었나 | `numeric_match` / `regime_disclosed` | `blocked_phrases` |
+|---|---|---|---|
+| `provider_error` | 호출이 예외로 끝났다 — 타임아웃·429·5xx·응답 형식 위반 | `null` (검증까지 못 감) | `[]` |
+| `blocked_phrases` | 금지 표현이 검출돼 차단했다 | `null` (검증까지 못 감) | **검출된 표현 목록** |
+| `budget_exhausted` | 총예산 8초가 소진돼 재시도를 생략했다 | 마지막 시도의 측정값 | `[]` |
+| `verification_failed` | 수치 대조 또는 급변 구간 고지 검사에 걸렸다 | 어느 쪽이 `false` 인지가 답이다 | `[]` |
+| `null` | 폴백하지 않았다 (`fallback: false`) | 둘 다 `true` | `[]` |
+
+- **`numeric_match`·`regime_disclosed` 는 nullable 이다.** `null` 은 "실패"가 아니라 **"측정하지
+  않았다"** 다. 검증 단계에 도달하지 못한 경로에서 `true` 를 채워 넣지 않는다 — 통과한 출력이
+  애초에 존재하지 않았는데 통과했다고 말하는 것이 가장 나쁘다.
+- 이 두 필드와 `fallback_reason` 은 **`null` 이어도 응답에서 생략되지 않는다**(전역 `non_null` 을
+  이 객체에서만 뒤집는다). 필드가 사라지면 "검증 안 됨" 과 "필드 없음" 을 구분할 수 없다.
 
 | 규칙 | 근거 |
 |---|---|
 | `facts`에 없는 숫자를 AI가 만들지 않는다. 서버는 응답의 숫자를 `facts`와 대조한다 | FR-AI-02, FR-AI-05, NFR-AI-02 |
 | `surface: forecast_summary`는 항상 4문장이다. `explain_level`은 내용 구성만 바꾼다 | FR-AI-04, FR-FC-07 |
 | 검증 실패 시 `fallback: true`와 고정 템플릿 문장을 내리며 **200을 유지**한다 | FR-AI-06, NFR-AI-03 |
+| 폴백했다면 `verification.fallback_reason` 이 네 경로 중 어느 것인지 말한다 | 이슈 #122 |
 | 프롬프트와 응답 전문은 `audit_logs(action='ai_explained')`에 기록 | ERD §10 |
 | `explain_level`·`explain_domain`은 이 엔드포인트 밖의 어느 계산에도 전달되지 않는다 | FR-CM-08, ERD 설계원칙 |
 

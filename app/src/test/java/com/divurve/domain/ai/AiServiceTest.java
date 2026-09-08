@@ -37,6 +37,9 @@ import org.mockito.junit.jupiter.MockitoExtension;
  *
  * <p>이슈 #73 에서 더해진 실 LLM 대응 — API 예외 격리, 금지 표현 즉시 폴백(재시도 없음),
  * 총예산 소진 시 재시도 생략, 급변 구간 안내 누락 검사도 함께 본다.
+ *
+ * <p>이슈 #122 — <b>폴백 경로 넷이 결과에서 서로 구분되는지</b>를 함께 고정한다. 넷이 같은 값으로
+ * 수렴하면 배포 환경에서 왜 폴백했는지 알 방법이 없어진다.
  */
 @ExtendWith(MockitoExtension.class)
 class AiServiceTest {
@@ -92,7 +95,9 @@ class AiServiceTest {
         assertThat(outcome.sentences()).isEqualTo(sentences);
         assertThat(outcome.fallback()).isFalse();
         assertThat(outcome.numericMatch()).isTrue();
+        assertThat(outcome.regimeDisclosed()).isTrue();
         assertThat(outcome.blockedPhrases()).isEmpty();
+        assertThat(outcome.fallbackReason()).isNull();
         assertThat(outcome.explainLevel()).isEqualTo("standard");
         assertThat(outcome.explainDomain()).isEqualTo("finance");
     }
@@ -109,9 +114,13 @@ class AiServiceTest {
 
         assertThat(outcome.fallback()).isTrue();
         assertThat(outcome.sentences()).isEqualTo(AiService.FALLBACK_SENTENCES);
-        // H1 — 실패해도 numericMatch 는 true 로 보고한다(폴백 문장은 수치를 담지 않는다).
-        assertThat(outcome.numericMatch()).isTrue();
+        // 이슈 #122 — 측정한 값을 그대로 보고한다. 예전에는 상수 true 가 실려 "검증을 통과했다" 로
+        // 읽혔는데, 통과한 출력은 애초에 존재하지 않았다.
+        assertThat(outcome.numericMatch()).isFalse();
+        assertThat(outcome.regimeDisclosed()).isTrue();
         assertThat(outcome.blockedPhrases()).isEmpty();
+        assertThat(outcome.fallbackReason())
+                .isEqualTo(AiService.FallbackReason.VERIFICATION_FAILED);
         verify(aiProvider, times(AiService.MAX_ATTEMPTS)).explain(any(ExplainContext.class));
     }
 
@@ -126,6 +135,12 @@ class AiServiceTest {
 
         assertThat(outcome.fallback()).isTrue();
         assertThat(outcome.sentences()).isEqualTo(AiService.FALLBACK_SENTENCES);
+        // 이슈 #122 — 차단한 표현을 응답이 숨기지 않는다. 빈 목록으로 나가면 무엇에 걸렸는지 사라진다.
+        assertThat(outcome.blockedPhrases()).containsExactly("반드시", "매수하세요");
+        assertThat(outcome.fallbackReason()).isEqualTo(AiService.FallbackReason.BLOCKED_PHRASES);
+        // 검증 단계까지 가지 않았으므로 측정값이 없다 — 채워 넣지 않는다.
+        assertThat(outcome.numericMatch()).isNull();
+        assertThat(outcome.regimeDisclosed()).isNull();
         // §5 4단계는 "차단"이지 "재생성"이 아니다 — 두 번 부르면 요금과 지연만 2배가 된다.
         verify(aiProvider, times(1)).explain(any(ExplainContext.class));
         verify(validator, never()).verify(anyList(), anyMap());
@@ -142,6 +157,10 @@ class AiServiceTest {
         // FR-AI-06 — AI 실패가 500 으로 나가지 않는다.
         assertThat(outcome.fallback()).isTrue();
         assertThat(outcome.sentences()).isEqualTo(AiService.FALLBACK_SENTENCES);
+        assertThat(outcome.fallbackReason()).isEqualTo(AiService.FallbackReason.PROVIDER_ERROR);
+        assertThat(outcome.numericMatch()).isNull();
+        assertThat(outcome.regimeDisclosed()).isNull();
+        assertThat(outcome.blockedPhrases()).isEmpty();
         verify(aiProvider, times(1)).explain(any(ExplainContext.class));
         verify(narrativeFilter, never()).detect(anyString());
     }
@@ -160,6 +179,10 @@ class AiServiceTest {
         AiService.ExplainOutcome outcome = budgetSpent.explain(userId, "forecast_summary", facts);
 
         assertThat(outcome.fallback()).isTrue();
+        // 검증 실패로 재시도하려던 참에 예산이 끊긴 것이므로, 끝낸 사유는 예산 소진이다.
+        assertThat(outcome.fallbackReason()).isEqualTo(AiService.FallbackReason.BUDGET_EXHAUSTED);
+        // 첫 시도는 검증까지 갔으므로 그때의 측정값은 남아 있다.
+        assertThat(outcome.numericMatch()).isFalse();
         verify(aiProvider, times(1)).explain(any(ExplainContext.class));
     }
 
@@ -176,6 +199,11 @@ class AiServiceTest {
 
         // §5.1 — 급변 구간에서 안내가 빠지는 것은 하필 가장 필요한 순간에 규약이 깨지는 것이다.
         assertThat(outcome.fallback()).isTrue();
+        // 이슈 #122 — 두 측정값이 "어느 검증에서 걸렸는가" 를 그대로 말한다.
+        assertThat(outcome.numericMatch()).isTrue();
+        assertThat(outcome.regimeDisclosed()).isFalse();
+        assertThat(outcome.fallbackReason())
+                .isEqualTo(AiService.FallbackReason.VERIFICATION_FAILED);
         verify(aiProvider, times(AiService.MAX_ATTEMPTS)).explain(any(ExplainContext.class));
     }
 
@@ -273,6 +301,16 @@ class AiServiceTest {
     @Test
     void 총예산_기본값은_8초_그대로다() {
         assertThat(AiService.DEFAULT_TOTAL_BUDGET).isEqualTo("8s");
+    }
+
+    @Test
+    void FallbackReason_code는_응답에_싣는_snake_case를_준다() {
+        // 네 경로가 응답에서 서로 다른 값으로 구분되는 것이 이슈 #122 의 요구다.
+        assertThat(AiService.FallbackReason.PROVIDER_ERROR.code()).isEqualTo("provider_error");
+        assertThat(AiService.FallbackReason.BLOCKED_PHRASES.code()).isEqualTo("blocked_phrases");
+        assertThat(AiService.FallbackReason.BUDGET_EXHAUSTED.code()).isEqualTo("budget_exhausted");
+        assertThat(AiService.FallbackReason.VERIFICATION_FAILED.code())
+                .isEqualTo("verification_failed");
     }
 
     /** 읽을 때마다 시간이 흐르는 시계 — 첫 호출이 예산을 다 쓴 상황을 재현한다. */
