@@ -4,17 +4,18 @@ import com.divurve.api.config.auth.CurrentUser;
 import com.divurve.api.dto.notifications.NotificationsResponse;
 import com.divurve.common.architecture.WebAdapter;
 import com.divurve.common.response.ApiResponse;
+import com.divurve.domain.notification.NotificationQueryService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
-import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * 알림 엔드포인트 (이슈 #21).
- * 사용자의 알림 목록을 조회한다. 현재는 기본 구현으로 빈 목록을 반환한다.
+ * 알림 엔드포인트 (이슈 #21, #97). 사용자의 알림 목록을 조회한다.
+ * 발송(적재)·읽음 처리 유스케이스는 이 이슈 밖이다 — 지금은 조회만 한다.
  */
 @WebAdapter
 @RestController
@@ -22,11 +23,19 @@ import org.springframework.web.bind.annotation.RestController;
 @Tag(name = "Notifications", description = "사용자 알림")
 public class NotificationController {
 
-    @Operation(summary = "알림 목록 조회")
+    private final NotificationQueryService notificationQueryService;
+
+    public NotificationController(NotificationQueryService notificationQueryService) {
+        this.notificationQueryService = Objects.requireNonNull(notificationQueryService, "notificationQueryService");
+    }
+
+    @Operation(
+            summary = "알림 목록 조회",
+            description = "본인의 알림을 최신순으로 반환한다. 알림이 없으면 200 + 빈 배열이다(FR-CM-09) — "
+                    + "실사용자는 알림이 없을 수 있으므로 이 빈 상태 자체가 유효한 결과다.")
     @GetMapping
     public ApiResponse<NotificationsResponse> getNotifications(@CurrentUser UUID userId) {
-        // TODO: userId 기준으로 실제 알림 목록을 조회한다.
         // @CurrentUser 파라미터 자체가 인증을 강제하므로 별도 확인 호출이 필요 없다.
-        return ApiResponse.of(new NotificationsResponse(List.of()));
+        return ApiResponse.of(NotificationsResponse.from(notificationQueryService.listNotifications(userId)));
     }
 }

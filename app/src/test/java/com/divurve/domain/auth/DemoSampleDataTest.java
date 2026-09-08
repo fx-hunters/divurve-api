@@ -30,6 +30,14 @@ class DemoSampleDataTest {
     /** {@code CurrencyMaster} 가 표시 규칙을 제공하는 통화 — 시드는 이 밖으로 나가지 않는다. */
     private static final Set<String> SUPPORTED_CURRENCIES = Set.of("USD", "EUR", "JPY", "GBP", "CNY");
 
+    /** {@code V11__stress.sql} 이 시드하는 마스터 시나리오 코드 — 데모 실행 이력은 이 밖을 가리키면 안 된다. */
+    private static final Set<String> MASTER_STRESS_SCENARIO_CODES =
+            Set.of("equity_down_krw_weak", "equity_down_krw_strong");
+
+    /** {@code notifications.kind} CHECK 제약 허용값 (V24 마이그레이션, ERD notification_type ENUM). */
+    private static final Set<String> ALLOWED_NOTIFICATION_KINDS = Set.of(
+            "step_due", "regime_shift", "deadline_near", "target_zone", "safe_mode", "concentration");
+
     private final RiskProfileScorer riskProfileScorer = new RiskProfileScorer();
 
     @Test
@@ -250,5 +258,22 @@ class DemoSampleDataTest {
         assertThat(holdings).isNotEmpty();
         assertThat(deposits).isNotEmpty();
         assertThat(krwAssets).isNotEmpty();
+    }
+
+    @Test
+    void 스트레스_실행_이력은_마스터에_있는_시나리오만_가리킨다() {
+        // 새 시나리오를 만들지 않는다 — V11__stress.sql 이 이미 시드한 2종만 쓴다(이슈 #97).
+        assertThat(DemoSampleData.STRESS_RUN_SCENARIO_CODES)
+                .isNotEmpty()
+                .allSatisfy(code -> assertThat(code).isIn(MASTER_STRESS_SCENARIO_CODES));
+    }
+
+    @Test
+    void 알림_샘플은_허용된_kind이고_제목_본문이_비어있지_않다() {
+        DemoSampleData.NotificationSample notification = DemoSampleData.NOTIFICATION;
+
+        assertThat(notification.kind()).isIn(ALLOWED_NOTIFICATION_KINDS);
+        assertThat(notification.title()).isNotBlank();
+        assertThat(notification.body()).isNotBlank();
     }
 }

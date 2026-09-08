@@ -5,6 +5,7 @@ import com.divurve.domain.auth.DemoSampleData.DepositSample;
 import com.divurve.domain.auth.DemoSampleData.GoalSample;
 import com.divurve.domain.auth.DemoSampleData.HoldingSample;
 import com.divurve.domain.auth.DemoSampleData.KrwAssetSample;
+import com.divurve.domain.auth.DemoSampleData.NotificationSample;
 import com.divurve.domain.goal.GoalRepository;
 import com.divurve.domain.goal.entity.Goal;
 import com.divurve.domain.holding.DepositRepository;
@@ -14,7 +15,10 @@ import com.divurve.domain.holding.entity.Deposit;
 import com.divurve.domain.holding.entity.Holding;
 import com.divurve.domain.holding.entity.KrwAsset;
 import com.divurve.domain.holding.entity.PurchaseFxRate;
+import com.divurve.domain.notification.NotificationRepository;
+import com.divurve.domain.notification.entity.Notification;
 import com.divurve.domain.settings.RiskProfileService;
+import com.divurve.domain.stress.StressRunService;
 import com.divurve.domain.user.UserRepository;
 import com.divurve.domain.user.entity.User;
 import java.math.BigDecimal;
@@ -38,6 +42,8 @@ import java.time.LocalDate;
  *
  * <p>계산 로직은 없다. 위험성향도 유형을 시드하지 않고 진단 응답만 제출해
  * {@link RiskProfileService} 가 결정론적으로 산출하게 한다(CLAUDE.md 1장 — 수치는 계산 로직만 만든다).
+ * 스트레스 실행 이력도 같은 원칙을 따른다 — 시나리오 코드(입력)만 두고, 효과 3항(파생 수치)은
+ * {@link StressRunService} 가 방금 시드한 보유 자산으로 실제 계산한다(이슈 #97).
  *
  * <p>시드 끝에 {@link User#markSampleDataSeeded()} 로 표시를 남긴다 — 두 경로가 모두 이 클래스를
  * 지나므로 표시가 한 곳에서 처리되고, 어느 쪽이든 누락되지 않는다(이슈 #112).
@@ -51,6 +57,8 @@ public class SampleDataSeeder {
     private final GoalRepository goalRepository;
     private final UserRepository userRepository;
     private final RiskProfileService riskProfileService;
+    private final StressRunService stressRunService;
+    private final NotificationRepository notificationRepository;
     private final Clock clock;
 
     public SampleDataSeeder(
@@ -60,6 +68,8 @@ public class SampleDataSeeder {
             GoalRepository goalRepository,
             UserRepository userRepository,
             RiskProfileService riskProfileService,
+            StressRunService stressRunService,
+            NotificationRepository notificationRepository,
             Clock clock) {
         this.holdingRepository = holdingRepository;
         this.depositRepository = depositRepository;
@@ -67,18 +77,38 @@ public class SampleDataSeeder {
         this.goalRepository = goalRepository;
         this.userRepository = userRepository;
         this.riskProfileService = riskProfileService;
+        this.stressRunService = stressRunService;
+        this.notificationRepository = notificationRepository;
         this.clock = clock;
     }
 
     /**
      * {@link DemoSampleData} 정의를 이 사용자의 보유 종목·외화 예금·원화 자산·목표로 복제하고,
-     * 간편 진단 응답을 제출한다.
+     * 간편 진단 응답을 제출한 뒤 스트레스 실행 이력·알림을 남긴다.
      *
      * @param owner 시드를 받을 사용자 (이미 저장돼 있어야 한다)
      */
     public void seed(User owner) {
         LocalDate today = LocalDate.now(clock);
 
+        seedHoldings(owner, today);
+        seedDeposits(owner, today);
+        seedStressRunHistory(owner);
+        seedKrwAssets(owner);
+        seedGoal(owner, today);
+
+        // 유형·점수·기준선은 여기서 만들지 않는다 — 응답만 제출하고 산출은 RiskProfileScorer 가 한다.
+        riskProfileService.submitSimple(owner.getId(), DemoSampleData.RISK_PROFILE_ANSWERS);
+
+        seedNotification(owner);
+
+        // 이 자산이 샘플이라는 사실을 남긴다 — 프론트의 "체험용 데이터" 배지 판정 근거다(이슈 #112).
+        // is_demo 로는 갈리지 않는다: 가입 계정도 실연동 전까지 같은 샘플을 받기 때문이다.
+        owner.markSampleDataSeeded();
+        userRepository.save(owner);
+    }
+
+    private void seedHoldings(User owner, LocalDate today) {
         for (HoldingSample sample : DemoSampleData.HOLDINGS) {
             Holding holding = Holding.create(
                     owner, sample.ticker(), sample.currencyCode(), sample.quantity(), sample.avgPrice());
@@ -86,19 +116,25 @@ public class SampleDataSeeder {
                     sample.purchasedOn(today), purchaseFxRate(sample.purchaseFxRateKrw(), sample.purchasedOn(today)));
             holdingRepository.save(holding);
         }
+    }
 
+    private void seedDeposits(User owner, LocalDate today) {
         for (DepositSample sample : DemoSampleData.DEPOSITS) {
             Deposit deposit = Deposit.create(owner, sample.currencyCode(), sample.amount());
             deposit.assignPurchaseContext(
                     sample.purchasedOn(today), purchaseFxRate(sample.purchaseFxRateKrw(), sample.purchasedOn(today)));
             depositRepository.save(deposit);
         }
+    }
 
+    private void seedKrwAssets(User owner) {
         for (KrwAssetSample sample : DemoSampleData.KRW_ASSETS) {
             krwAssetRepository.save(
                     KrwAsset.create(owner, sample.kind(), sample.label(), sample.amountKrw(), clock.instant()));
         }
+    }
 
+    private void seedGoal(User owner, LocalDate today) {
         GoalSample goal = DemoSampleData.GOAL;
         goalRepository.save(Goal.builder(owner, goal.name(), goal.kind(), goal.purpose(), goal.currencyCode())
                 .targetAmount(goal.targetAmount())
@@ -109,14 +145,22 @@ public class SampleDataSeeder {
                 .isSpeculative(goal.isSpeculative())
                 .status(goal.status())
                 .build());
+    }
 
-        // 유형·점수·기준선은 여기서 만들지 않는다 — 응답만 제출하고 산출은 RiskProfileScorer 가 한다.
-        riskProfileService.submitSimple(owner.getId(), DemoSampleData.RISK_PROFILE_ANSWERS);
+    /**
+     * 마스터 시나리오별로 스트레스 실행을 남긴다. 효과 3항은 여기서 만들지 않는다 —
+     * 방금 시드한 보유 자산으로 {@link StressRunService} 가 실제로 계산한다(CLAUDE.md 1장, 이슈 #97).
+     */
+    private void seedStressRunHistory(User owner) {
+        for (String scenarioCode : DemoSampleData.STRESS_RUN_SCENARIO_CODES) {
+            stressRunService.run(owner.getId(), scenarioCode);
+        }
+    }
 
-        // 이 자산이 샘플이라는 사실을 남긴다 — 프론트의 "체험용 데이터" 배지 판정 근거다(이슈 #112).
-        // is_demo 로는 갈리지 않는다: 가입 계정도 실연동 전까지 같은 샘플을 받기 때문이다.
-        owner.markSampleDataSeeded();
-        userRepository.save(owner);
+    private void seedNotification(User owner) {
+        NotificationSample sample = DemoSampleData.NOTIFICATION;
+        notificationRepository.save(
+                Notification.create(owner, sample.kind(), sample.title(), sample.body()));
     }
 
     private PurchaseFxRate purchaseFxRate(BigDecimal rateKrw, LocalDate purchasedOn) {

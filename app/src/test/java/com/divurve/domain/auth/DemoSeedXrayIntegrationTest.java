@@ -15,6 +15,7 @@ import com.divurve.domain.holding.DepositRepository;
 import com.divurve.domain.holding.FxAssetValuator;
 import com.divurve.domain.holding.HoldingRepository;
 import com.divurve.domain.holding.KrwAssetRepository;
+import com.divurve.domain.notification.NotificationRepository;
 import com.divurve.domain.port.AuthTokens;
 import com.divurve.domain.port.FxRateProvider;
 import com.divurve.domain.port.RateSnapshot;
@@ -23,6 +24,9 @@ import com.divurve.domain.settings.RiskProfileRepository;
 import com.divurve.domain.settings.RiskProfileService;
 import com.divurve.domain.settings.UserSettingsRepository;
 import com.divurve.domain.settings.UserSettingsService;
+import com.divurve.domain.stress.StressRunService;
+import com.divurve.domain.stress.StressScenarioRepository;
+import com.divurve.domain.stress.StressTestRunRepository;
 import com.divurve.domain.user.UserRepository;
 import com.divurve.domain.xray.XrayService;
 import com.divurve.engine.attribution.AttributionCalculator;
@@ -31,6 +35,7 @@ import com.divurve.engine.concentration.ConcentrationThresholdTable;
 import com.divurve.engine.cost.EffectiveSpreadCalculator;
 import com.divurve.engine.riskprofile.DetailDiagnosisMapper;
 import com.divurve.engine.riskprofile.RiskProfileScorer;
+import com.divurve.engine.stress.StressCalculator;
 import com.divurve.engine.weight.QuoteUnitNormalizer;
 import com.divurve.engine.weight.WeightCalculator;
 import jakarta.persistence.EntityManager;
@@ -82,6 +87,12 @@ class DemoSeedXrayIntegrationTest extends RepositoryTestBase {
     private RiskProfileRepository riskProfileRepository;
     @Autowired
     private UserSettingsRepository userSettingsRepository;
+    @Autowired
+    private StressScenarioRepository stressScenarioRepository;
+    @Autowired
+    private StressTestRunRepository stressTestRunRepository;
+    @Autowired
+    private NotificationRepository notificationRepository;
     @Autowired
     private EntityManager entityManager;
 
@@ -143,6 +154,8 @@ class DemoSeedXrayIntegrationTest extends RepositoryTestBase {
                 goalRepository,
                 userRepository,
                 riskProfileService(),
+                stressRunService(),
+                notificationRepository,
                 CLOCK);
         new AuthDemoService(userRepository, seeder, tokenProvider, CLOCK).createDemoSession("127.0.0.1");
 
@@ -173,11 +186,31 @@ class DemoSeedXrayIntegrationTest extends RepositoryTestBase {
                 krwAssetRepository,
                 userRepository,
                 riskProfileService(),
-                new FxAssetValuator(new PerUnitFxRates(StoredFxRates.NONE, stubFxRates(), new QuoteUnitNormalizer())),
+                fxAssetValuator(),
                 new WeightCalculator(),
                 new AttributionCalculator(),
                 new ConcentrationCalculator(),
                 new ConcentrationThresholdTable());
+    }
+
+    /**
+     * 데모 시드 안에서 {@code StressRunService} 가 실제로 계산하도록 조립한다 — 스트레스 실행 이력의
+     * 효과 3항은 시드 값이 아니라 이 서비스가 계산한 값이어야 한다(CLAUDE.md 1장, 이슈 #97).
+     */
+    private StressRunService stressRunService() {
+        return new StressRunService(
+                stressScenarioRepository,
+                stressTestRunRepository,
+                userRepository,
+                holdingRepository,
+                depositRepository,
+                fxAssetValuator(),
+                new StressCalculator(),
+                CLOCK);
+    }
+
+    private FxAssetValuator fxAssetValuator() {
+        return new FxAssetValuator(new PerUnitFxRates(StoredFxRates.NONE, stubFxRates(), new QuoteUnitNormalizer()));
     }
 
     /** 고정 환율 어댑터 — 목록에 없는 통화쌍은 조회 실패와 같게 예외로 돌려준다. */
