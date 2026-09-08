@@ -2,12 +2,13 @@ package com.divurve.domain.forecast;
 
 import com.divurve.common.architecture.UseCase;
 import com.divurve.common.exception.InvalidRequestException;
+import com.divurve.domain.event.EconEventRepository;
+import com.divurve.domain.event.EconEventVocabulary;
 import com.divurve.domain.fx.PerUnitFxRates;
 import com.divurve.domain.holding.DepositRepository;
 import com.divurve.domain.holding.HoldingRepository;
 import com.divurve.domain.holding.entity.Deposit;
 import com.divurve.domain.holding.entity.Holding;
-import com.divurve.domain.port.EconomicEventProvider;
 import com.divurve.domain.port.FxRateHistoryProvider;
 import com.divurve.engine.forecast.FanChartCalculator;
 import com.divurve.engine.forecast.ModelPerformanceCalculator;
@@ -74,6 +75,9 @@ public class ForecastService {
     /** 응답 {@code history} 로 내려보낼 최근 관측 수. */
     private static final int HISTORY_POINTS = 90;
 
+    /** {@code GET /events} 조회 창(일). 명세 §5.9 "향후 90일". */
+    private static final int EVENTS_WINDOW_DAYS = 90;
+
     /** 5년 백분위 계산에 필요한 관측 수(영업일) + 30일 롤링 윈도. */
     private static final int REQUIRED_OBSERVATIONS = 5 * HistoryWindow.BUSINESS_DAYS_PER_YEAR + 30;
 
@@ -105,7 +109,7 @@ public class ForecastService {
 
     private final CrossRateResolver crossRateResolver;
     private final PerUnitFxRates perUnitFxRates;
-    private final EconomicEventProvider eventProvider;
+    private final EconEventRepository econEventRepository;
     private final HoldingRepository holdingRepository;
     private final DepositRepository depositRepository;
     private final RegimeClassifier regimeClassifier;
@@ -114,14 +118,14 @@ public class ForecastService {
     public ForecastService(
             CrossRateResolver crossRateResolver,
             PerUnitFxRates perUnitFxRates,
-            EconomicEventProvider eventProvider,
+            EconEventRepository econEventRepository,
             HoldingRepository holdingRepository,
             DepositRepository depositRepository,
             RegimeClassifier regimeClassifier,
             Clock clock) {
         this.crossRateResolver = Objects.requireNonNull(crossRateResolver, "crossRateResolver");
         this.perUnitFxRates = Objects.requireNonNull(perUnitFxRates, "perUnitFxRates");
-        this.eventProvider = Objects.requireNonNull(eventProvider, "eventProvider");
+        this.econEventRepository = Objects.requireNonNull(econEventRepository, "econEventRepository");
         this.holdingRepository = Objects.requireNonNull(holdingRepository, "holdingRepository");
         this.depositRepository = Objects.requireNonNull(depositRepository, "depositRepository");
         this.regimeClassifier = Objects.requireNonNull(regimeClassifier, "regimeClassifier");
@@ -298,12 +302,36 @@ public class ForecastService {
     /**
      * 경제 일정 조회 ({@code GET /events}).
      *
-     * @return 향후 90일 이벤트
+     * @return 향후 {@value #EVENTS_WINDOW_DAYS}일 이벤트 (날짜 오름차순)
      */
+    @Transactional(readOnly = true)
     public List<EconomicEventView> getEvents() {
-        return eventProvider.fetchUpcoming(LocalDate.now(clock), 90).stream()
+        return getEvents(EVENTS_WINDOW_DAYS);
+    }
+
+    /**
+     * 조회 창을 좁힌 경제 일정 조회 (이슈 #162).
+     *
+     * <p>홈의 <b>주의 필요</b> 블록은 임박한 일정만 쓰므로 90일을 다 읽을 이유가 없다. 예전에는
+     * 90일치를 받아 호출부가 다시 걸렀다 — 이제 구간을 쿼리로 내린다.
+     *
+     * <p>{@code withinDays} 는 이 클래스와 {@code HomeSummaryService} 의 상수로만 들어와
+     * 별도 검증을 두지 않는다. 음수가 오면 {@code from > to} 라 빈 목록이 나온다.
+     *
+     * @param withinDays 오늘부터 며칠 뒤까지 (포함)
+     * @return 이벤트 목록 (날짜 오름차순)
+     */
+    @Transactional(readOnly = true)
+    public List<EconomicEventView> getEvents(int withinDays) {
+        LocalDate today = LocalDate.now(clock);
+        return econEventRepository
+                .findByEventDateBetweenOrderByEventDateAsc(today, today.plusDays(withinDays))
+                .stream()
                 .map(event -> new EconomicEventView(
-                        event.date(), event.title(), event.currencyCode(), event.importance()))
+                        event.getEventDate(),
+                        event.getTitle(),
+                        EconEventVocabulary.toCurrencyCode(event.getRegion()),
+                        EconEventVocabulary.toImportance(event.getImpact())))
                 .toList();
     }
 

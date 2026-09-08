@@ -16,7 +16,6 @@ import com.divurve.domain.settings.RiskProfileView;
 import com.divurve.domain.user.UserRepository;
 import com.divurve.domain.xray.XrayService;
 import com.divurve.domain.xray.XrayService.PortfolioSnapshot;
-import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
@@ -73,7 +72,6 @@ public class HomeSummaryService {
     private final ForecastService forecastService;
     private final MarketRegimeService marketRegimeService;
     private final GoalService goalService;
-    private final Clock clock;
 
     public HomeSummaryService(
             UserRepository userRepository,
@@ -81,15 +79,13 @@ public class HomeSummaryService {
             RiskProfileService riskProfileService,
             ForecastService forecastService,
             MarketRegimeService marketRegimeService,
-            GoalService goalService,
-            Clock clock) {
+            GoalService goalService) {
         this.userRepository = Objects.requireNonNull(userRepository, "userRepository");
         this.xrayService = Objects.requireNonNull(xrayService, "xrayService");
         this.riskProfileService = Objects.requireNonNull(riskProfileService, "riskProfileService");
         this.forecastService = Objects.requireNonNull(forecastService, "forecastService");
         this.marketRegimeService = Objects.requireNonNull(marketRegimeService, "marketRegimeService");
         this.goalService = Objects.requireNonNull(goalService, "goalService");
-        this.clock = Objects.requireNonNull(clock, "clock");
     }
 
     /**
@@ -171,11 +167,9 @@ public class HomeSummaryService {
     }
 
     private AttentionView resolveAttention(MarketRegimeView regime) {
-        LocalDate cutoff = LocalDate.now(clock).plusDays(UPCOMING_EVENT_WINDOW_DAYS);
-        List<EconomicEventView> upcoming = forecastService.getEvents().stream()
-                .filter(event -> !event.date().isAfter(cutoff))
-                .toList();
-        return new AttentionView(regime.badge(), upcoming);
+        // 조회 창을 쿼리로 내린다(이슈 #162) — 예전에는 90일치를 받아 여기서 다시 걸렀다.
+        return new AttentionView(
+                regime.badge(), forecastService.getEvents(UPCOMING_EVENT_WINDOW_DAYS));
     }
 
     /**
