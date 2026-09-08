@@ -27,7 +27,7 @@ class ClaudeAiProviderTest {
     private final StubMessageClient messageClient = new StubMessageClient();
     private final StubTemplateProvider templateProvider = new StubTemplateProvider();
     private final AnthropicProperties props =
-            new AnthropicProperties(true, "sk-ant-test", null, 0, null, null);
+            new AnthropicProperties(true, false, "sk-ant-test", null, 0, null);
 
     private final ClaudeAiProvider sut =
             new ClaudeAiProvider(messageClient, templateProvider, mapper, props);

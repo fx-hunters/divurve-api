@@ -69,9 +69,12 @@ class AiServiceTest {
         service = newService(Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
+    /** 총예산 기본값(8s)과 같은 값. 이슈 #123 이후 예산은 주입값이므로 테스트가 명시적으로 준다. */
+    private static final Duration TOTAL_BUDGET = Duration.ofSeconds(8);
+
     private AiService newService(Clock clock) {
         return new AiService(aiProvider, validator, narrativeFilter, userSettingsService,
-                regimeDisclosureCheck, clock);
+                regimeDisclosureCheck, clock, TOTAL_BUDGET);
     }
 
     private void stubSettings(String level, String domain) {
@@ -171,7 +174,7 @@ class AiServiceTest {
         when(narrativeFilter.detect("자산은 999999입니다.")).thenReturn(List.of());
 
         // 첫 호출이 예산을 다 쓴 상황 — 시계가 예산 너머로 가 있다.
-        AiService budgetSpent = newService(new SteppingClock(NOW, AiService.TOTAL_BUDGET));
+        AiService budgetSpent = newService(new SteppingClock(NOW, TOTAL_BUDGET));
 
         AiService.ExplainOutcome outcome = budgetSpent.explain(userId, "forecast_summary", facts);
 
@@ -256,17 +259,48 @@ class AiServiceTest {
     void 생성자는_협력자가_null_이면_실패한다() {
         Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);
         assertThatThrownBy(() -> new AiService(null, validator, narrativeFilter, userSettingsService,
-                regimeDisclosureCheck, clock)).isInstanceOf(NullPointerException.class);
+                regimeDisclosureCheck, clock, TOTAL_BUDGET)).isInstanceOf(NullPointerException.class);
         assertThatThrownBy(() -> new AiService(aiProvider, null, narrativeFilter, userSettingsService,
-                regimeDisclosureCheck, clock)).isInstanceOf(NullPointerException.class);
+                regimeDisclosureCheck, clock, TOTAL_BUDGET)).isInstanceOf(NullPointerException.class);
         assertThatThrownBy(() -> new AiService(aiProvider, validator, null, userSettingsService,
-                regimeDisclosureCheck, clock)).isInstanceOf(NullPointerException.class);
+                regimeDisclosureCheck, clock, TOTAL_BUDGET)).isInstanceOf(NullPointerException.class);
         assertThatThrownBy(() -> new AiService(aiProvider, validator, narrativeFilter, null,
-                regimeDisclosureCheck, clock)).isInstanceOf(NullPointerException.class);
+                regimeDisclosureCheck, clock, TOTAL_BUDGET)).isInstanceOf(NullPointerException.class);
         assertThatThrownBy(() -> new AiService(aiProvider, validator, narrativeFilter, userSettingsService,
-                null, clock)).isInstanceOf(NullPointerException.class);
+                null, clock, TOTAL_BUDGET)).isInstanceOf(NullPointerException.class);
         assertThatThrownBy(() -> new AiService(aiProvider, validator, narrativeFilter, userSettingsService,
-                regimeDisclosureCheck, null)).isInstanceOf(NullPointerException.class);
+                regimeDisclosureCheck, null, TOTAL_BUDGET)).isInstanceOf(NullPointerException.class);
+        assertThatThrownBy(() -> new AiService(aiProvider, validator, narrativeFilter, userSettingsService,
+                regimeDisclosureCheck, clock, null)).isInstanceOf(NullPointerException.class);
+    }
+
+    /**
+     * 이슈 #123 (2) — 예산은 이제 {@code AiService} 안의 상수가 아니라 주입값이다.
+     * 같은 시계라도 예산을 넉넉히 주면 두 번째 시도가 실제로 일어난다. 예전에는 상수가 판정해
+     * {@code app.external.anthropic.total-budget} 을 아무리 바꿔도 이 동작이 변하지 않았다.
+     */
+    @Test
+    void explain_총예산은_주입값을_따른다() {
+        stubSettings("simple", "plain");
+        List<String> bad = List.of("자산은 999999입니다.");
+        when(aiProvider.explain(any(ExplainContext.class))).thenReturn(new ExplainResult(bad));
+        when(validator.verify(bad, facts)).thenReturn(false);
+        when(narrativeFilter.detect("자산은 999999입니다.")).thenReturn(List.of());
+
+        // 기본값(8s)이면 소진되는 시계지만, 예산을 늘리면 재시도가 살아난다.
+        AiService generous = new AiService(aiProvider, validator, narrativeFilter, userSettingsService,
+                regimeDisclosureCheck, new SteppingClock(NOW, TOTAL_BUDGET), Duration.ofSeconds(60));
+
+        AiService.ExplainOutcome outcome = generous.explain(userId, "forecast_summary", facts);
+
+        assertThat(outcome.fallback()).isTrue();
+        verify(aiProvider, times(AiService.MAX_ATTEMPTS)).explain(any(ExplainContext.class));
+    }
+
+    /** 기본 예산은 이슈 #73 확정값 그대로다 — #123 은 조정 가능하게만 만들고 값은 바꾸지 않는다. */
+    @Test
+    void 총예산_기본값은_8초_그대로다() {
+        assertThat(AiService.DEFAULT_TOTAL_BUDGET).isEqualTo("8s");
     }
 
     @Test

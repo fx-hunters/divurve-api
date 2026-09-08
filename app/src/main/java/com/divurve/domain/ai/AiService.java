@@ -14,6 +14,7 @@ import java.util.Objects;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
@@ -40,8 +41,11 @@ import org.springframework.transaction.annotation.Transactional;
  *   <li><b>재시도 정책 분리</b> — 수치 대조 실패는 재생성할 값이 있지만, 금지 표현은 §5 4단계가
  *       "차단"이라고 규정한 것이지 "재생성"이 아니다. 금지 표현과 API 예외는 재시도 없이 폴백한다.
  *       이 구분이 없으면 실 API 에서 요금과 지연만 2배가 된다.</li>
- *   <li><b>총예산</b> — {@value #TOTAL_BUDGET_SECONDS}초. 남은 예산이 없으면 재시도를 생략한다.
- *       요청당 타임아웃(5초)만으로는 재시도까지 합쳐 10초가 될 수 있어 NFR-AI-03 을 지키지 못한다.</li>
+ *   <li><b>총예산</b> — 기본 {@value #DEFAULT_TOTAL_BUDGET}. 남은 예산이 없으면 재시도를 생략한다.
+ *       요청당 타임아웃(기본 5초)만으로는 재시도까지 합쳐 10초가 될 수 있어 NFR-AI-03 을 지키지 못한다.
+ *       값은 {@code app.external.anthropic.total-budget} 으로 조정한다(이슈 #123 (2)) — 예전에는
+ *       그 프로퍼티를 아무도 읽지 않고 여기 상수가 따로 판정해, 요청당 타임아웃만 올리면 재시도가
+ *       조용히 사라지는 상태였다.</li>
  * </ul>
  *
  * <p><b>감사 기록(ERD §10 {@code audit_logs}, action='ai_explained')은 여전히 범위 밖이다</b>(이슈 #56).
@@ -61,13 +65,14 @@ public class AiService {
     static final int MAX_ATTEMPTS = 2;
 
     /**
-     * 서술 1건에 쓸 수 있는 총시간 (이슈 #73 확정). 요청당 타임아웃은 인프라 설정
-     * ({@code app.external.anthropic.request-timeout}, 기본 5초)이고, 이 상수는 <b>재시도까지 포함한</b>
+     * 서술 1건에 쓸 수 있는 총시간의 기본값 (이슈 #73 확정). 요청당 타임아웃은 인프라 설정
+     * ({@code app.external.anthropic.request-timeout}, 기본 5초)이고, 이 값은 <b>재시도까지 포함한</b>
      * 상한이다. 남은 예산이 없으면 두 번째 호출을 하지 않고 바로 폴백한다.
+     *
+     * <p>운영에서는 {@code app.external.anthropic.total-budget}({@code ANTHROPIC_TOTAL_BUDGET})
+     * 으로 바꾼다 — 요청당 타임아웃을 올리면서 이 값을 그대로 두면 두 번째 시도가 영영 오지 않는다.
      */
-    static final int TOTAL_BUDGET_SECONDS = 8;
-
-    static final Duration TOTAL_BUDGET = Duration.ofSeconds(TOTAL_BUDGET_SECONDS);
+    static final String DEFAULT_TOTAL_BUDGET = "8s";
 
     private static final Logger log = LoggerFactory.getLogger(AiService.class);
 
@@ -87,6 +92,7 @@ public class AiService {
     private final UserSettingsService userSettingsService;
     private final RegimeDisclosureCheck regimeDisclosureCheck;
     private final Clock clock;
+    private final Duration totalBudget;
 
     public AiService(
             AiProvider aiProvider,
@@ -94,13 +100,16 @@ public class AiService {
             NarrativeFilter narrativeFilter,
             UserSettingsService userSettingsService,
             RegimeDisclosureCheck regimeDisclosureCheck,
-            Clock clock) {
+            Clock clock,
+            @Value("${app.external.anthropic.total-budget:" + DEFAULT_TOTAL_BUDGET + "}")
+            Duration totalBudget) {
         this.aiProvider = Objects.requireNonNull(aiProvider, "aiProvider");
         this.numericValidator = Objects.requireNonNull(numericValidator, "numericValidator");
         this.narrativeFilter = Objects.requireNonNull(narrativeFilter, "narrativeFilter");
         this.userSettingsService = Objects.requireNonNull(userSettingsService, "userSettingsService");
         this.regimeDisclosureCheck = Objects.requireNonNull(regimeDisclosureCheck, "regimeDisclosureCheck");
         this.clock = Objects.requireNonNull(clock, "clock");
+        this.totalBudget = Objects.requireNonNull(totalBudget, "totalBudget");
     }
 
     /**
@@ -121,7 +130,7 @@ public class AiService {
         String explainLevel = settings.explainLevel();
         String explainDomain = settings.explainDomain();
 
-        Instant deadline = clock.instant().plus(TOTAL_BUDGET);
+        Instant deadline = clock.instant().plus(totalBudget);
 
         // 검증 단계까지 도달한 마지막 시도의 측정값. 한 번도 도달하지 못했으면 null 로 남겨
         // "측정되지 않았다" 를 그대로 응답에 싣는다(이슈 #122) — 폴백에 true 를 채워 넣지 않는다.
@@ -132,8 +141,8 @@ public class AiService {
 
         for (int attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
             if (attempt > 0 && !clock.instant().isBefore(deadline)) {
-                log.warn("AI 서술 예산({}초) 소진 — 재시도 없이 폴백한다. surface={}",
-                        TOTAL_BUDGET_SECONDS, surface);
+                log.warn("AI 서술 예산({}) 소진 — 재시도 없이 폴백한다. surface={}",
+                        totalBudget, surface);
                 fallbackReason = FallbackReason.BUDGET_EXHAUSTED;
                 break;
             }
