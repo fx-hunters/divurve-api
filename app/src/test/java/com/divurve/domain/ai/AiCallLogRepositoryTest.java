@@ -31,6 +31,9 @@ import org.springframework.data.domain.Sort;
 @DisplayName("AI 호출 로그 스키마·조회 (V26)")
 class AiCallLogRepositoryTest extends RepositoryTestBase {
 
+    /** 기록에 함께 남는 출처 IP (이슈 #140). 이 테스트의 관심사는 아니지만 컬럼은 채워 둔다. */
+    private static final String CLIENT_IP_FIXTURE = "203.0.113.7";
+
     private static final Instant DAY_1 = Instant.parse("2026-09-07T10:00:00Z");
     private static final Instant DAY_2 = Instant.parse("2026-09-08T10:00:00Z");
 
@@ -53,7 +56,7 @@ class AiCallLogRepositoryTest extends RepositoryTestBase {
     void userDeletionKeepsCostHistory() {
         UUID userId = insertUser("ai-cost@example.com");
         AiCallLog saved = aiCallLogRepository.saveAndFlush(AiCallLog.narrate(
-                DAY_1, userId, true, "forecast_summary", "claude-opus-5",
+                DAY_1, userId, true, CLIENT_IP_FIXTURE, "forecast_summary", "claude-opus-5",
                 TokenUsage.of(100, 40), AiCallOutcome.SUCCESS, null, 500, null));
 
         entityManager.createNativeQuery("delete from users where id = :id")
@@ -77,7 +80,7 @@ class AiCallLogRepositoryTest extends RepositoryTestBase {
     @DisplayName("LLM 을 부르지 않은 요청은 model 이 비고 토큰이 0 이다")
     void requestWithoutLlmHasNoModel() {
         AiCallLog saved = aiCallLogRepository.saveAndFlush(AiCallLog.narrate(
-                DAY_1, insertUser("template@example.com"), false, "profile_fit", null,
+                DAY_1, insertUser("template@example.com"), false, CLIENT_IP_FIXTURE, "profile_fit", null,
                 TokenUsage.NONE, AiCallOutcome.SUCCESS, null, 3, null));
 
         AiCallLog found = aiCallLogRepository.findById(saved.getId()).orElseThrow();
@@ -205,9 +208,9 @@ class AiCallLogRepositoryTest extends RepositoryTestBase {
      */
     private void seedThree() {
         UUID userId = insertUser("seed@example.com");
-        aiCallLogRepository.save(AiCallLog.narrate(DAY_1, userId, false, "forecast_summary",
+        aiCallLogRepository.save(AiCallLog.narrate(DAY_1, userId, false, CLIENT_IP_FIXTURE, "forecast_summary",
                 "claude-opus-5", TokenUsage.of(100, 40), AiCallOutcome.SUCCESS, null, 500, null));
-        aiCallLogRepository.save(AiCallLog.narrate(DAY_1, userId, false, "forecast_summary",
+        aiCallLogRepository.save(AiCallLog.narrate(DAY_1, userId, false, CLIENT_IP_FIXTURE, "forecast_summary",
                 "claude-opus-5", TokenUsage.of(50, 20), AiCallOutcome.FALLBACK, "provider_error",
                 5000, "IOException: timeout"));
         aiCallLogRepository.save(AiCallLog.extract(DAY_2, null, "claude-opus-5",
@@ -225,6 +228,93 @@ class AiCallLogRepositoryTest extends RepositoryTestBase {
                 .setParameter("outcome", outcome)
                 .executeUpdate();
         entityManager.flush();
+    }
+
+    // ---------------------------------------------------------------------
+    // 쿼터 카운트 (V27, 이슈 #140)
+    // ---------------------------------------------------------------------
+
+    @Test
+    @DisplayName("쿼터 카운트가 세 층을 한 행으로 돌려주고, 캐시 히트·쿼터 차단은 세지 않는다")
+    void quotaCountSeparatesLayersAndIgnoresFreeOutcomes() {
+        UUID me = insertUser("quota-me@example.com");
+        UUID other = insertUser("quota-other@example.com");
+        String myIp = "203.0.113.10";
+        String otherIp = "203.0.113.99";
+        Instant since = DAY_2.minusSeconds(3600);
+
+        // 내 유료 호출 2건 — 사용자·IP·전역 모두에 들어간다.
+        save(me, myIp, AiCallOutcome.SUCCESS, DAY_2);
+        save(me, myIp, AiCallOutcome.FALLBACK, DAY_2);
+        // 같은 IP 의 다른 사용자 1건 — IP·전역에만 들어간다.
+        save(other, myIp, AiCallOutcome.SUCCESS, DAY_2);
+        // 다른 IP 1건 — 전역에만 들어간다.
+        save(other, otherIp, AiCallOutcome.SUCCESS, DAY_2);
+        // 비용이 0 인 두 결과는 어느 층에도 들어가지 않는다.
+        save(me, myIp, AiCallOutcome.CACHE_HIT, DAY_2);
+        save(me, myIp, AiCallOutcome.QUOTA_BLOCKED, DAY_2);
+        // 창 밖의 호출도 빠진다.
+        save(me, myIp, AiCallOutcome.SUCCESS, DAY_1);
+        entityManager.flush();
+
+        Object[] counts = aiCallLogRepository.countChargeableSince(me, myIp, since).get(0);
+
+        assertThat(((Number) counts[0]).longValue())
+                .as("캐시 히트는 비용이 0 이므로 쿼터를 소모하지 않는다(이슈 #139 와의 순서 규약)")
+                .isEqualTo(2);
+        assertThat(((Number) counts[1]).longValue())
+                .as("같은 IP 의 다른 사용자 호출도 IP 층에는 들어간다")
+                .isEqualTo(3);
+        assertThat(((Number) counts[2]).longValue()).isEqualTo(4);
+    }
+
+    @Test
+    @DisplayName("IP 를 모르는 요청은 빈 문자열로 세어 IP 층이 0 이 된다")
+    void quotaCountWithUnknownIpYieldsZeroForThatLayer() {
+        UUID me = insertUser("quota-unknown-ip@example.com");
+        // client_ip 가 null 인 행은 어떤 IP 와도 묶이지 않는다 — 출처 불명끼리 서로를 막지 않는다.
+        save(me, null, AiCallOutcome.SUCCESS, DAY_2);
+        save(me, null, AiCallOutcome.SUCCESS, DAY_2);
+        entityManager.flush();
+
+        Object[] counts =
+                aiCallLogRepository.countChargeableSince(me, "", DAY_2.minusSeconds(3600)).get(0);
+
+        assertThat(((Number) counts[0]).longValue()).isEqualTo(2);
+        assertThat(((Number) counts[1]).longValue())
+                .as("빈 문자열은 어떤 행과도 일치하지 않는다 — 그래서 IP 층이 자연히 건너뛰어진다")
+                .isZero();
+        assertThat(((Number) counts[2]).longValue()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("호출이 없어도 한 행이 온다 — 집계 쿼리이므로 빈 결과가 아니다")
+    void quotaCountAlwaysReturnsOneRow() {
+        // 빈 목록이 오면 호출자의 get(0) 이 터진다. 집계만 하는 쿼리는 항상 한 행이다.
+        Object[] counts = aiCallLogRepository
+                .countChargeableSince(UUID.randomUUID(), "203.0.113.1", DAY_2).get(0);
+
+        assertThat(((Number) counts[0]).longValue()).isZero();
+        assertThat(((Number) counts[1]).longValue()).isZero();
+        assertThat(((Number) counts[2]).longValue()).isZero();
+    }
+
+    @Test
+    @DisplayName("client_ip 는 45자까지 저장된다 — IPv6 최대 표기")
+    void clientIpHoldsFullIpv6() {
+        String ipv6 = "2001:0db8:85a3:0000:0000:8a2e:0370:7334";
+        AiCallLog saved = aiCallLogRepository.saveAndFlush(AiCallLog.narrate(
+                DAY_2, insertUser("ipv6@example.com"), false, ipv6, "forecast_summary", null,
+                TokenUsage.NONE, AiCallOutcome.SUCCESS, null, 5, null));
+
+        assertThat(aiCallLogRepository.findById(saved.getId()).orElseThrow().getClientIp())
+                .isEqualTo(ipv6);
+    }
+
+    private void save(UUID userId, String clientIp, AiCallOutcome outcome, Instant at) {
+        aiCallLogRepository.save(AiCallLog.narrate(
+                at, userId, false, clientIp, "forecast_summary", null, TokenUsage.NONE,
+                outcome, outcome == AiCallOutcome.QUOTA_BLOCKED ? "quota_user" : null, 5, null));
     }
 
     private UUID insertUser(String email) {

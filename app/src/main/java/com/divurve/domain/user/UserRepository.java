@@ -69,4 +69,31 @@ public interface UserRepository extends JpaRepository<User, UUID> {
             + "  and coalesce(u.lastLoginAt, u.createdAt) < :threshold")
     List<UUID> findExpiredDemoUserIds(
             @Param("threshold") Instant threshold, Pageable pageable);
+
+    /**
+     * 한 IP 에서 최근에 발급된 데모 계정 수 (이슈 #140).
+     *
+     * <p>데모 발급 레이트리밋의 근거다. 별도 카운터 테이블을 두지 않는 이유는 발급 자체가 이미
+     * 행을 남기기 때문이다 — {@code AuthDemoService} 가 발급 시각·IP 를
+     * {@code recordLogin} 으로 기록한다(이슈 #111). 세는 것과 남기는 것이 같은 표여야 관리자
+     * 화면의 숫자와 차단 판정이 어긋나지 않는다.
+     *
+     * <p>{@code lastLoginAt} 이 아니라 {@code createdAt} 을 본다 — 데모 계정은 발급이 곧 접속이라
+     * 두 값이 같게 시작하지만, {@code lastLoginAt} 은 토큰 갱신 때 갱신되므로(이슈 #138) 그것으로
+     * 세면 <b>발급</b>이 아니라 <b>활동</b>을 센다.
+     *
+     * <p>{@code clientIp} 는 {@code null} 을 받지 않는다 — 출처를 모르는 발급은 호출자가 이
+     * 카운트를 건너뛴다. {@code null} 을 넘겨 {@code null = null} 로 묶으면 출처 불명 발급 전부가
+     * 한 바구니가 되어 서로를 차단한다.
+     *
+     * @param clientIp 발급 출처 IP
+     * @param since    창의 시작 시각 (포함)
+     * @return 그 창 안에 이 IP 에서 만들어진 데모 계정 수
+     */
+    @Query("select count(u) from User u "
+            + "where u.isDemo = true "
+            + "  and u.lastLoginIp = :clientIp "
+            + "  and u.createdAt >= :since")
+    long countDemoUsersFromIpSince(
+            @Param("clientIp") String clientIp, @Param("since") Instant since);
 }

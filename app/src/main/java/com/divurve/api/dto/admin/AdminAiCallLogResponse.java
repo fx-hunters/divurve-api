@@ -63,7 +63,7 @@ public record AdminAiCallLogResponse(
             String outcome,
             @Schema(example = "provider_error",
                     allowableValues = {"provider_error", "blocked_phrases", "budget_exhausted",
-                            "verification_failed"})
+                            "verification_failed", "quota_user", "quota_ip", "quota_global"})
             String fallbackReason,
             Integer latencyMs,
             String errorSummary) {

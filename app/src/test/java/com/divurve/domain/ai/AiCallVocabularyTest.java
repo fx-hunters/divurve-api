@@ -34,6 +34,23 @@ class AiCallVocabularyTest {
     }
 
     @Test
+    @DisplayName("쿼터 층 코드와 폴백 사유 코드가 정확히 짝을 이룬다 (이슈 #140)")
+    void quotaLayerCodesMatchFallbackReasonCodes() {
+        // 두 enum 이 서로를 참조하지 않는 대신(순환 의존을 피했다) 여기서 일치를 지킨다.
+        // 갈리면 관리자 화면의 fallback_reason 값으로 SQL 을 짰을 때 조용히 0건이 된다.
+        assertThat(AiCallQuota.Layer.USER.code())
+                .isEqualTo(AiService.FallbackReason.QUOTA_USER.code());
+        assertThat(AiCallQuota.Layer.IP.code())
+                .isEqualTo(AiService.FallbackReason.QUOTA_IP.code());
+        assertThat(AiCallQuota.Layer.GLOBAL.code())
+                .isEqualTo(AiService.FallbackReason.QUOTA_GLOBAL.code());
+
+        assertThat(AiCallQuota.Layer.values())
+                .as("층이 늘면 짝이 되는 폴백 사유도 함께 늘어야 한다")
+                .hasSize(3);
+    }
+
+    @Test
     @DisplayName("NONE 은 토큰을 쓰지 않은 경로를 나타낸다")
     void noneMeansNoLlmCall() {
         assertThat(TokenUsage.NONE.inputTokens()).isZero();

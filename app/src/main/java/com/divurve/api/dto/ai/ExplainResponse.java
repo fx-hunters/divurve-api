@@ -44,8 +44,9 @@ public record ExplainResponse(Explanation explanation, Verification verification
      *                        평시이면 검사 없이 {@code true}, 도달하지 못했으면 {@code null}
      * @param blockedPhrases  발견된 금지 표현. 없으면 빈 목록
      * @param fallbackReason  폴백 사유 — {@code provider_error} · {@code blocked_phrases} ·
-     *                        {@code budget_exhausted} · {@code verification_failed}.
-     *                        폴백이 아니면 {@code null}
+     *                        {@code budget_exhausted} · {@code verification_failed} ·
+     *                        {@code quota_user} · {@code quota_ip} · {@code quota_global}
+     *                        (이슈 #140). 폴백이 아니면 {@code null}
      */
     @JsonInclude(JsonInclude.Include.ALWAYS)
     public record Verification(
@@ -54,7 +55,8 @@ public record ExplainResponse(Explanation explanation, Verification verification
             List<String> blockedPhrases,
             @Schema(description = "폴백 사유. 폴백이 아니면 null",
                     allowableValues = {"provider_error", "blocked_phrases",
-                        "budget_exhausted", "verification_failed"},
+                        "budget_exhausted", "verification_failed",
+                        "quota_user", "quota_ip", "quota_global"},
                     example = "provider_error")
             String fallbackReason) {
     }

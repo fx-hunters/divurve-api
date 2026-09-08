@@ -86,4 +86,39 @@ public interface AiCallLogRepository extends JpaRepository<AiCallLog, UUID> {
              order by day desc, l.purpose, l.model
             """, nativeQuery = true)
     List<Object[]> summarize(@Param("from") Instant from, @Param("to") Instant to);
+
+    /**
+     * 쿼터 세 층의 카운트를 <b>쿼리 한 번에</b> 센다 (이슈 #140).
+     *
+     * <p><b>왜 한 번인가.</b> 이 카운트는 서술 요청마다 돈다. 층별로 나누면 정상 요청(세 층을 모두
+     * 통과하는 대다수)마다 왕복이 셋으로 늘고, 배포 환경에서 쿼리 하나가 왕복 50ms 대다 — 비용을
+     * 막으려고 넣은 장치가 매 요청에 150ms 를 더하는 것은 남는 거래가 아니다.
+     *
+     * <p><b>무엇을 세는가 — {@code success} 와 {@code fallback} 만.</b> 이 둘이 "프로바이더를
+     * 부르려 했다" 는 뜻이고, 쿼터가 막으려는 것이 그것이다. {@code cache_hit} 은 비용이 0 이므로
+     * 세지 않는다(그래서 캐시 히트는 쿼터를 소모하지 않는다 — 이슈 #139 와의 순서 규약).
+     * {@code quota_blocked} 도 세지 않는다: 차단이 다시 차단을 깊게 만들면 창이 지나도 회복이
+     * 늦어진다. {@code error} 는 extract 경로의 값이라 narrate 쿼터와 무관하다.
+     *
+     * <p><b>{@code null} 파라미터를 받지 않는다</b>(이슈 #118·#143 과 같은 함정). IP 를 모르는
+     * 요청은 호출자가 빈 문자열로 바꿔 넘긴다 — 저장되는 값은 실제 IP 또는 {@code null} 뿐이라
+     * 빈 문자열은 어떤 행과도 일치하지 않고, 그래서 IP 층이 자연스럽게 건너뛰어진다.
+     *
+     * @param userId   사용자당 카운트 대상
+     * @param clientIp IP당 카운트 대상. 모르면 빈 문자열 — 0 이 나온다
+     * @param since    창의 시작 시각 (포함)
+     * @return {@code [사용자 건수, IP 건수, 전체 건수]} 한 행. 집계만 하므로 항상 한 행이다
+     */
+    @Query(value = """
+            select count(*) filter (where l.user_id = cast(:userId as uuid)) as user_calls,
+                   count(*) filter (where l.client_ip = cast(:clientIp as text)) as ip_calls,
+                   count(*) as global_calls
+              from ai_call_logs l
+             where l.requested_at >= cast(:since as timestamptz)
+               and l.outcome in ('success', 'fallback')
+            """, nativeQuery = true)
+    List<Object[]> countChargeableSince(
+            @Param("userId") UUID userId,
+            @Param("clientIp") String clientIp,
+            @Param("since") Instant since);
 }

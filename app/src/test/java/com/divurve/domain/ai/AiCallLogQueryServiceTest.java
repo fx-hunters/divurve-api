@@ -36,6 +36,9 @@ import org.springframework.data.domain.Sort;
 @DisplayName("AiCallLogQueryService")
 class AiCallLogQueryServiceTest {
 
+    /** 기록에 함께 남는 출처 IP (이슈 #140). 이 테스트의 관심사는 아니지만 컬럼은 채워 둔다. */
+    private static final String CLIENT_IP_FIXTURE = "203.0.113.7";
+
     private static final Instant NOW = Instant.parse("2026-09-08T03:00:00Z");
 
     @Mock
@@ -50,7 +53,7 @@ class AiCallLogQueryServiceTest {
     }
 
     private static AiCallLog narrateLog() {
-        return AiCallLog.narrate(NOW, UUID.randomUUID(), true, "forecast_summary",
+        return AiCallLog.narrate(NOW, UUID.randomUUID(), true, CLIENT_IP_FIXTURE, "forecast_summary",
                 "claude-opus-5", new TokenUsage(120, 45, 7L, 3L),
                 AiCallOutcome.FALLBACK, "provider_error", 4321, "IOException: timeout");
     }
