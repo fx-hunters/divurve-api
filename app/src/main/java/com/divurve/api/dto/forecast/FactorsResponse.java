@@ -13,7 +13,9 @@ import java.util.List;
  */
 @Schema(description = "L2 — 전망 동인. 표시 전용이며 계산 입력이 아니다.")
 public record FactorsResponse(
-        @Schema(example = "USDKRW") String pairCode,
+        @Schema(description = "통화쌍 코드(기준+표시 통화 ISO 4217 조합). 지원 통화쌍이 늘면 값도 "
+                + "늘어나므로 열거하지 않는다", example = "USDKRW")
+        String pairCode,
         @Schema(description = "동인 목록. 출처 확정 전까지 빈 배열이다.") List<Factor> factors) {
 
     /** 도메인 뷰를 응답 DTO 로 옮긴다. */
@@ -31,6 +33,13 @@ public record FactorsResponse(
      * @param direction      기여 방향
      */
     @Schema(description = "동인 한 건")
-    public record Factor(String key, String label, double contributionPp, String direction) {
+    public record Factor(
+            String key,
+            String label,
+            double contributionPp,
+            @Schema(description = "기여 방향. 서버가 보유한 동인이 없어 factors 가 항상 빈 배열이라 "
+                    + "이 필드가 채워지는 경로가 아직 없다 — 값 목록은 동인 데이터 도입 시(#57·#74) "
+                    + "확정한다.")
+            String direction) {
     }
 }
