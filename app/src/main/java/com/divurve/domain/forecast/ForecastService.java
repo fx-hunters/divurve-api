@@ -143,12 +143,10 @@ public class ForecastService {
         PairCode pair = PairCode.parse(rawPairCode);
         validateHorizon(horizonDays);
 
-        List<FxRateHistoryProvider.HistoryRateSnapshot> history =
-                crossRateResolver.fetch(pair, LocalDate.now(clock), HISTORY_LOOKBACK_CALENDAR_DAYS);
-        List<Double> dailyReturns = toDailyReturns(history);
-
-        double vol30d = realized30d(dailyReturns);
-        double volPercentile5y = percentile5y(dailyReturns);
+        SupportedPairHistory support = resolveSupportedPairHistory(pair);
+        List<FxRateHistoryProvider.HistoryRateSnapshot> history = support.history();
+        double vol30d = support.vol30d();
+        double volPercentile5y = support.volPercentile5y();
         Regime regime = regimeClassifier.classify(volPercentile5y);
 
         double currentRate = crossRateResolver.latestRate(pair);
@@ -280,11 +278,20 @@ public class ForecastService {
      * <p>🔒 <b>L2 — 표시 전용이다.</b> 반환값은 어떤 계산에도 입력되지 않으며 RouteContext 에도
      * 실리지 않는다(FR-FC-12). 값의 출처가 확정될 때까지 빈 목록이다 — 없는 근거를 만들지 않는다(FR-CM-10).
      *
+     * <p>{@code pair_code} 검증은 형제 엔드포인트({@link #getForecast})와 같은 경로
+     * ({@link #resolveSupportedPairHistory})를 그대로 쓴다 — 지원하지 않는 통화쌍은 과거 관측이
+     * 없어 여기서도 똑같이 {@code field=pair_code} 400 을 낸다(이슈 #89). 동인 값 자체는 계산에
+     * 쓰이지 않지만(FR-FC-12), "이 통화쌍을 다룰 수 있는가"라는 검증까지 생략할 이유는 아니다.
+     *
      * @param rawPairCode {@code pair_code}
      * @return 동인 목록 (현재는 비어 있다)
+     * @throws InvalidRequestException 통화쌍 표기 오류이거나 지원하지 않는 통화쌍인 경우
      */
+    @Transactional(readOnly = true)
     public FactorsView getFactors(String rawPairCode) {
-        return new FactorsView(PairCode.parse(rawPairCode).canonical());
+        PairCode pair = PairCode.parse(rawPairCode);
+        resolveSupportedPairHistory(pair);
+        return new FactorsView(pair.canonical());
     }
 
     /**
@@ -308,6 +315,24 @@ public class ForecastService {
                             .formatted(ALLOWED_HORIZON_DAYS_DISPLAY, horizonDays),
                     "horizon_days");
         }
+    }
+
+    /**
+     * 통화쌍의 과거 시계열을 가져오고, 같은 자리에서 변동성 계산 가능 여부로 지원 여부를 검증한다
+     * (이슈 #89) — {@code /forecast}·{@code /forecast/factors} 가 이 메서드 하나를 공유해
+     * 지원하지 않는 통화쌍(관측 없음)을 같은 {@code field=pair_code} 400 으로 거른다.
+     * 새 검증 로직을 따로 두지 않는다 — "지원 통화쌍" 목록을 이중으로 관리하면 둘이 어긋난다.
+     *
+     * @throws InvalidRequestException 30일 실현변동성 또는 5년 백분위를 계산할 관측이 없는 경우
+     */
+    private SupportedPairHistory resolveSupportedPairHistory(PairCode pair) {
+        List<FxRateHistoryProvider.HistoryRateSnapshot> history =
+                crossRateResolver.fetch(pair, LocalDate.now(clock), HISTORY_LOOKBACK_CALENDAR_DAYS);
+        List<Double> dailyReturns = toDailyReturns(history);
+
+        double vol30d = realized30d(dailyReturns);
+        double volPercentile5y = percentile5y(dailyReturns);
+        return new SupportedPairHistory(history, vol30d, volPercentile5y);
     }
 
     private static double realized30d(List<Double> dailyReturns) {
@@ -390,6 +415,16 @@ public class ForecastService {
                     .longValue();
         }
         return total;
+    }
+
+    /**
+     * {@link #resolveSupportedPairHistory} 결과 — 시계열과, 그로부터 이미 계산해 둔 변동성 지표.
+     * {@code getForecast} 가 바로 이어서 쓰는 값이라 두 번 계산하지 않는다.
+     */
+    private record SupportedPairHistory(
+            List<FxRateHistoryProvider.HistoryRateSnapshot> history,
+            double vol30d,
+            double volPercentile5y) {
     }
 
     // ── 도메인 뷰 ────────────────────────────────────────────────

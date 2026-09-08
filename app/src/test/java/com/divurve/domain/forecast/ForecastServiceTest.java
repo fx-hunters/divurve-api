@@ -365,7 +365,22 @@ class ForecastServiceTest {
     @Test
     @DisplayName("전망 동인은 출처 확정 전까지 빈 목록이다 (L2)")
     void factorsAreEmpty() {
+        givenHistory(history(LONG_HISTORY, 0.01, 0.01));
+
         assertEquals("USDKRW", service.getFactors("usd_krw").pairCode());
+    }
+
+    @Test
+    @DisplayName("이슈 #89 — /forecast/factors 도 형제 엔드포인트와 같은 경로로 지원하지 않는 "
+            + "통화쌍을 field=pair_code 400 으로 거른다")
+    void factorsRejectsUnsupportedPairLikeSiblingEndpoints() {
+        // XYZABC 는 KRW 크로스가 아니라서 유도 조회를 타는데, 어댑터에 XYZ_KRW·ABC_KRW 스텁이
+        // 전혀 없으니(historyProvider 는 이 테스트에서 어떤 통화도 관측을 주지 않는다) 형제
+        // 엔드포인트(getForecast)의 emptyHistoryFailsFast 와 같은 "관측 없음" 경로를 그대로 탄다.
+        InvalidRequestException exception = assertThrows(
+                InvalidRequestException.class, () -> service.getFactors("XYZABC"));
+
+        assertEquals("pair_code", exception.getField());
     }
 
     @Test
