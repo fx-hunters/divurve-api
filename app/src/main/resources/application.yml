@@ -74,10 +74,23 @@ app:
       api-key: ${ANTHROPIC_API_KEY:}
       model: ${ANTHROPIC_MODEL:claude-opus-5}
       max-tokens: ${ANTHROPIC_MAX_TOKENS:1024}
-      # 요청 1건당 타임아웃.
-      request-timeout: ${ANTHROPIC_REQUEST_TIMEOUT:5s}
+      # 추론 강도 (이슈 #158). low|medium|high|xhigh|max — 허용값 밖이면 기동 시점에 실패한다.
+      # 이 값을 보내지 않으면 서버 기본값 high 가 적용된다. claude-opus-5 는 thinking 을 생략하면
+      # adaptive thinking 이 켜지므로(Opus 4.8/4.7 과 반대), "안 보냄" 은 "안 씀" 이 아니다.
+      # 서술은 확정된 facts 를 4문장으로 옮기는 일이라 추론 깊이가 결과를 바꾸지 않는다 —
+      # high 로 돌던 시절 실측 14.8초 / 출력 359토큰이었고, 타임아웃 5초를 넘겨 전건 폴백이었다.
+      effort: ${ANTHROPIC_EFFORT:low}
+      # 요청 1건당 타임아웃. effort 를 낮춘 뒤에도 콜드 스타트·지연 스파이크는 남으므로 여유를 둔다.
+      # 최악 소요시간은 이 값 하나로 정해지지 않는다(아래 total-budget).
+      request-timeout: ${ANTHROPIC_REQUEST_TIMEOUT:12s}
       # 재시도까지 포함한 서술 1건의 총예산. AiService 가 이 값을 읽는다 —
       # request-timeout 만 올리고 이 값을 그대로 두면 두 번째 시도가 영영 오지 않는다(#123).
+      #
+      # 두 값을 함께 정할 때 쓰는 산식 (이슈 #158):
+      #     최악 소요 = request-timeout + min(total-budget, request-timeout)
+      # 타임아웃은 PROVIDER_ERROR 라 재시도하지 않으므로, 이중 지연은 "호출은 성공했는데 검증에
+      # 걸린" 경우에만 생긴다. 즉 이 값은 사실상 "첫 시도가 이만큼 안에 끝났을 때만 재시도한다"는
+      # 뜻이다. 지금 조합(12s/8s)의 최악은 20초다.
       total-budget: ${ANTHROPIC_TOTAL_BUDGET:8s}
       # AI 추출(extract) 경로 — 비정형 원문 → econ_events (이슈 #74). narrate(위 forecast_summary)와는
       # 입력·실패 처리가 다른 별도 경로다. 대상 뉴스 소스가 아직 팀 결정 전이고(MockRawArticleSource
