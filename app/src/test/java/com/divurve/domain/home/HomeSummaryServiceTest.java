@@ -4,9 +4,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.when;
 
+import com.divurve.api.controller.HomeController;
+import com.divurve.api.controller.XrayController;
+import com.divurve.api.dto.home.HomeSummaryResponse;
+import com.divurve.api.dto.xray.XrayResponse;
 import com.divurve.common.exception.InvalidRequestException;
 import com.divurve.common.exception.NotFoundException;
+import com.divurve.common.response.ApiResponse;
 import com.divurve.domain.forecast.ForecastService.ForecastView;
+import com.divurve.domain.forecast.ForecastService.HistoryPoint;
 import com.divurve.domain.forecast.ForecastService.IntervalView;
 import com.divurve.domain.forecast.ForecastService.LabelsView;
 import com.divurve.domain.forecast.ForecastService.ModelInfoView;
@@ -30,10 +36,12 @@ import com.divurve.domain.xray.XrayService;
 import java.time.Clock;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.stream.IntStream;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -120,9 +128,13 @@ class HomeSummaryServiceTest {
     }
 
     private ForecastView forecastView() {
+        return forecastView(List.of());
+    }
+
+    private ForecastView forecastView(List<HistoryPoint> history) {
         return new ForecastView(
                 "USDKRW", 30, TODAY, 1382.40, 1382.40,
-                List.of(), List.of(), List.of(),
+                history, List.of(), List.of(),
                 new IntervalView(1346.0, 1431.0, 0.06),
                 new VolatilityView(0.061, 0.72, "elevated"),
                 new UserImpactView(157_900L, 15_790_000L),
@@ -173,6 +185,9 @@ class HomeSummaryServiceTest {
         assertThat(view.fxStatus().topCurrencyCode()).isEqualTo("USD");
         assertThat(view.fxStatus().sensitivity1pctKrw()).isEqualTo(247_200L);
         assertThat(view.fxStatus().dayChangeKrw()).isEqualTo(84_000L);
+        // 이슈 #94 — 통화별 노출은 XrayService.PortfolioSnapshot 이 이미 들고 있는 값을 그대로 옮긴다.
+        assertThat(view.fxStatus().currencyToAssetKrw()).isEqualTo(Map.of("USD", 24_720_000L));
+        assertThat(view.fxStatus().exposureShare()).isEqualTo(Map.of("USD", 1.0));
         assertThat(view.profileFit().grade()).isEqualTo("balanced");
         assertThat(view.profileFit().concentrationStatus()).isEqualTo("above_threshold");
     }
@@ -281,5 +296,94 @@ class HomeSummaryServiceTest {
         assertThat(view.attention().upcomingEvents()).extracting(
                 ForecastService.EconomicEventView::title).containsExactly("FOMC");
         assertThat(view.regime()).isEqualTo("stress");
+    }
+
+    /**
+     * 이슈 #94 필수 테스트 1 — {@code fx_status.exposure} 는 {@code GET /xray} 의 {@code exposure} 와
+     * 완전히 같은 값이어야 한다. 두 컨트롤러에 <b>같은</b> {@link PortfolioSnapshot} 을 흘려보내
+     * 실제로 같은 값이 나오는지 검증한다(매핑 로직을 베껴 적어 통과시키는 것을 막는다).
+     */
+    @Test
+    void getSummary_fx_status_exposure는_GET_xray의_exposure와_같다() {
+        stubUserExists();
+        when(marketRegimeService.getRegime()).thenReturn(regimeView("normal", "normal"));
+        Map<String, Long> assets = new LinkedHashMap<>();
+        assets.put("USD", 15_790_000L);
+        assets.put("JPY", 5_470_000L);
+        Map<String, Double> exposureShare = new LinkedHashMap<>();
+        exposureShare.put("USD", 0.6388);
+        // JPY 는 비중이 빠져 있다 — 컨트롤러가 0.0 으로 채우는지도 함께 검증된다.
+        PortfolioSnapshot snapshot = new PortfolioSnapshot(
+                68_400_000L, 43_680_000L, 24_720_000L, 0.3614, assets, exposureShare,
+                new ConcentrationView("USD", 0.6388, 0.60, "risk_profile.balanced", "above_threshold", 0.0388),
+                new SensitivityView(247_200L, Map.of("USD", 157_900L, "JPY", 54_700L)),
+                null, true);
+        when(xrayService.getPortfolio(userId)).thenReturn(snapshot);
+        when(riskProfileService.getRiskProfile(userId)).thenReturn(riskProfileNotMeasured());
+        when(forecastService.getForecast(userId, "USDKRW", ForecastService.DEFAULT_HORIZON_DAYS))
+                .thenReturn(forecastView());
+        when(forecastService.getEvents()).thenReturn(List.of());
+        when(goalService.listByOwner(userId)).thenReturn(List.of());
+
+        ApiResponse<HomeSummaryResponse> homeResponse = new HomeController(service).getSummary(userId);
+        ApiResponse<XrayResponse> xrayResponse = new XrayController(xrayService).getXray(userId);
+
+        assertThat(homeResponse.data().fxStatus().exposure())
+                .containsExactlyElementsOf(xrayResponse.data().exposure());
+    }
+
+    /** 이슈 #94 필수 테스트 2 — 외화 자산이 없으면 빈 배열이다(FR-CM-09). */
+    @Test
+    void getSummary_외화자산이_없으면_fx_status_exposure는_빈_배열이다() {
+        stubUserExists();
+        when(marketRegimeService.getRegime()).thenReturn(regimeView("normal", "normal"));
+        when(xrayService.getPortfolio(userId)).thenReturn(portfolioWithoutFx());
+        when(riskProfileService.getRiskProfile(userId)).thenReturn(riskProfileNotMeasured());
+        when(forecastService.getForecast(userId, "USDKRW", ForecastService.DEFAULT_HORIZON_DAYS))
+                .thenReturn(forecastView());
+        when(forecastService.getEvents()).thenReturn(List.of());
+
+        ApiResponse<HomeSummaryResponse> response = new HomeController(service).getSummary(userId);
+
+        assertThat(response.data().fxStatus().exposure()).isEmpty();
+    }
+
+    /** 이슈 #94 — forecast.history 는 전체 관측 중 최근 30영업일만 꼬리에서 잘라 담는다. */
+    @Test
+    void getSummary_forecast_history는_최근_30영업일만_담는다() {
+        stubUserExists();
+        when(marketRegimeService.getRegime()).thenReturn(regimeView("normal", "normal"));
+        when(xrayService.getPortfolio(userId)).thenReturn(portfolioWithoutFx());
+        when(riskProfileService.getRiskProfile(userId)).thenReturn(riskProfileNotMeasured());
+        List<HistoryPoint> fullHistory = IntStream.range(0, 40)
+                .mapToObj(i -> new HistoryPoint(TODAY.minusDays(40 - i), 1300.0 + i))
+                .toList();
+        when(forecastService.getForecast(userId, "USDKRW", ForecastService.DEFAULT_HORIZON_DAYS))
+                .thenReturn(forecastView(fullHistory));
+        when(forecastService.getEvents()).thenReturn(List.of());
+
+        HomeSummaryService.HomeSummaryView view = service.getSummary(userId);
+
+        assertThat(view.forecast().history()).hasSize(30)
+                .isEqualTo(fullHistory.subList(10, 40));
+    }
+
+    /** 관측이 30개보다 적으면 있는 만큼만 담고 잘라내지 않는다. */
+    @Test
+    void getSummary_forecast_history가_30개_미만이면_전부_담는다() {
+        stubUserExists();
+        when(marketRegimeService.getRegime()).thenReturn(regimeView("normal", "normal"));
+        when(xrayService.getPortfolio(userId)).thenReturn(portfolioWithoutFx());
+        when(riskProfileService.getRiskProfile(userId)).thenReturn(riskProfileNotMeasured());
+        List<HistoryPoint> shortHistory = List.of(
+                new HistoryPoint(TODAY.minusDays(2), 1380.0),
+                new HistoryPoint(TODAY.minusDays(1), 1381.0));
+        when(forecastService.getForecast(userId, "USDKRW", ForecastService.DEFAULT_HORIZON_DAYS))
+                .thenReturn(forecastView(shortHistory));
+        when(forecastService.getEvents()).thenReturn(List.of());
+
+        HomeSummaryService.HomeSummaryView view = service.getSummary(userId);
+
+        assertThat(view.forecast().history()).isEqualTo(shortHistory);
     }
 }
