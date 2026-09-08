@@ -3,6 +3,8 @@ package com.divurve.domain.user;
 import com.divurve.domain.user.entity.User;
 import java.util.Optional;
 import java.util.UUID;
+import java.time.Instant;
+import java.util.List;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -45,4 +47,26 @@ public interface UserRepository extends JpaRepository<User, UUID> {
             + "  and (:demo is null or u.isDemo = :demo)")
     Page<User> searchForAdmin(
             @Param("keyword") String keyword, @Param("demo") Boolean demo, Pageable pageable);
+
+    /**
+     * 마지막 접속이 {@code threshold} 보다 오래된 데모 계정의 id 를 조회한다 (이슈 #138).
+     *
+     * <p><b>{@code coalesce} 가 필요한 이유</b> — {@code last_login_at} 은 nullable 이라
+     * {@code lastLoginAt < :threshold} 로 쓰면 그 값이 비어 있는 행이 영구히 남는다. 데모는 발급
+     * 시점에 접속을 기록하므로 실무상 비어 있지 않지만, 판정이 컬럼 하나의 존재에 의존하면
+     * 기록 경로가 하나 바뀔 때 정리가 조용히 멈춘다.
+     *
+     * <p><b>{@code isDemo} 만 본다</b> — {@code sampleDataSeeded} 가 아니다. 실연동 도착 전까지
+     * 일반 가입 계정도 같은 샘플을 받으므로(이슈 #108) 그것을 기준으로 삼으면 실제 회원이 지워진다.
+     *
+     * <p>엔티티가 아니라 id 만 돌려주는 이유 — 호출자는 지우기만 하고 필드를 읽지 않는다.
+     *
+     * @param threshold 이 시각보다 마지막 접속이 오래된 계정이 대상이다
+     * @param pageable  1회 실행 상한. 상한 없는 벌크 삭제를 피한다
+     */
+    @Query("select u.id from User u "
+            + "where u.isDemo = true "
+            + "  and coalesce(u.lastLoginAt, u.createdAt) < :threshold")
+    List<UUID> findExpiredDemoUserIds(
+            @Param("threshold") Instant threshold, Pageable pageable);
 }

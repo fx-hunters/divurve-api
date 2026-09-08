@@ -302,9 +302,16 @@ class AuthServiceTest {
         verify(tokenProvider).issue(userId, false);
     }
 
-    /** 토큰은 유효한데 사용자 행이 사라진 경우 — 갱신은 되지만 초기 설정 미완료로 본다. */
+    /**
+     * 토큰은 유효한데 사용자 행이 사라진 경우 — <b>401 이다</b> (이슈 #138).
+     *
+     * <p>예전에는 갱신이 성공하고 {@code onboarded=false} 만 내려갔다. 그러면 데모 정리로 계정이
+     * 지워진 뒤에도 리프레시 토큰 수명(14일) 동안 새 액세스 토큰이 계속 발급되고, 그 토큰으로 오는
+     * 요청은 401 이 아니라 <b>빈 데이터로 200</b> 이 된다 — 인증은 통과하는데 소유 데이터만 전부
+     * 비어 있어, 화면에서는 로그아웃도 오류도 아닌 것으로 보인다.
+     */
     @Test
-    void refreshAccessToken_사용자를_찾지_못하면_onboarded_false() {
+    void refreshAccessToken_사용자가_사라졌으면_401이다() {
         String refreshToken = "refresh_token";
         UUID userId = UUID.randomUUID();
 
@@ -313,7 +320,8 @@ class AuthServiceTest {
         when(tokenProvider.issue(userId, false)).thenReturn(new AuthTokens("new_access", "refresh", 1800));
         when(userRepository.findById(userId)).thenReturn(Optional.empty());
 
-        assertThat(authService.refreshAccessToken(refreshToken, CLIENT_IP).onboarded()).isFalse();
+        assertThatThrownBy(() -> authService.refreshAccessToken(refreshToken, CLIENT_IP))
+                .isInstanceOf(UnauthorizedException.class);
     }
 
     @Test
