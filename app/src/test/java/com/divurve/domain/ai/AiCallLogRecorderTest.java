@@ -26,6 +26,9 @@ import org.mockito.junit.jupiter.MockitoExtension;
 @DisplayName("AiCallLogRecorder")
 class AiCallLogRecorderTest {
 
+    /** 기록에 함께 남는 출처 IP (이슈 #140). 이 테스트의 관심사는 아니지만 컬럼은 채워 둔다. */
+    private static final String CLIENT_IP_FIXTURE = "203.0.113.7";
+
     @Mock
     private AiCallLogRepository aiCallLogRepository;
 
@@ -33,7 +36,7 @@ class AiCallLogRecorderTest {
         return AiCallLog.narrate(
                 Instant.parse("2026-09-08T00:00:00Z"),
                 UUID.randomUUID(),
-                true,
+                true, CLIENT_IP_FIXTURE,
                 "forecast_summary",
                 "claude-opus-5",
                 TokenUsage.of(100, 40),

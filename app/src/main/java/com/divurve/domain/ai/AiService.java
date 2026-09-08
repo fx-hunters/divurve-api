@@ -56,8 +56,11 @@ import org.springframework.transaction.annotation.Transactional;
  * 각각 막는다 — {@link ExplainRequestGuard} 가 {@code surface} 어휘와 {@code facts} 크기를
  * <b>호출 전에</b> 잘라내고(초과는 400), {@link ExplainResultCache} 가 같은 입력의 재요청을
  * 흡수한다. 특히 데모 계정은 {@code DemoSampleData} 템플릿 하나를 복제하므로 {@code facts} 가
- * 문자 그대로 같아, 데모 트래픽 대부분이 캐시 한 건에 모인다. 사용자별 쿼터와 일일 킬스위치는
- * 아직 범위 밖이다(이슈 #140).
+ * 문자 그대로 같아, 데모 트래픽 대부분이 캐시 한 건에 모인다.
+ *
+ * <p>그 위에 <b>총량 상한</b>을 얹는다(이슈 #140) — {@link AiCallQuota} 가 사용자·IP·전역 세 층을
+ * 보고, 넘으면 프로바이더를 아예 부르지 않고 폴백한다. 쿼터 검사는 <b>캐시 조회 뒤</b>다: 캐시
+ * 히트는 비용이 0 이므로 쿼터를 소모해서도, 쿼터에 막혀서도 안 된다.
  *
  * <p><b>감사 기록(ERD §10 {@code audit_logs}, action='ai_explained')은 여전히 범위 밖이다</b>(이슈 #56).
  * 마스킹 범위가 정해질 때까지 어댑터가 <b>페이로드 없이 호출 메타만</b> 로그로 남긴다.
@@ -109,6 +112,7 @@ public class AiService {
 
     private final AiProvider aiProvider;
     private final ExplainRequestGuard explainRequestGuard;
+    private final AiCallQuota aiCallQuota;
     private final ExplainResultCache explainResultCache;
     private final AiCallLogRecorder aiCallLogRecorder;
     private final AiResponseValidator numericValidator;
@@ -121,6 +125,7 @@ public class AiService {
     public AiService(
             AiProvider aiProvider,
             ExplainRequestGuard explainRequestGuard,
+            AiCallQuota aiCallQuota,
             ExplainResultCache explainResultCache,
             AiCallLogRecorder aiCallLogRecorder,
             AiResponseValidator numericValidator,
@@ -133,6 +138,7 @@ public class AiService {
         this.aiProvider = Objects.requireNonNull(aiProvider, "aiProvider");
         this.explainRequestGuard =
                 Objects.requireNonNull(explainRequestGuard, "explainRequestGuard");
+        this.aiCallQuota = Objects.requireNonNull(aiCallQuota, "aiCallQuota");
         this.explainResultCache = Objects.requireNonNull(explainResultCache, "explainResultCache");
         this.aiCallLogRecorder = Objects.requireNonNull(aiCallLogRecorder, "aiCallLogRecorder");
         this.numericValidator = Objects.requireNonNull(numericValidator, "numericValidator");
@@ -148,7 +154,10 @@ public class AiService {
      *
      * @param userId  사용자 ID — {@code explain_level}·{@code explain_domain} 조회와 호출 기록에 쓴다
      * @param demo    데모 세션의 요청인지 (이슈 #143) — 데모 트래픽 비중이 비용 분석의 핵심 축이다.
-     *                토큰의 {@code is_demo} 클레임이 유일한 근거이므로 컨트롤러가 넘겨준다
+     *                토큰의 {@code is_demo} 클레임이 유일한 근거이므로 컨트롤러가 넘겨준다.
+     *                쿼터에서는 더 낮은 상한을 고르는 축이 된다(이슈 #140)
+     * @param clientIp 요청 출처 IP (이슈 #140) — IP당 쿼터의 근거이자 기록의 한 컬럼.
+     *                알 수 없으면 {@code null} 이고 그때 IP 층은 건너뛴다
      * @param surface 서술 대상 화면 (예: {@code forecast_summary})
      * @param facts   엔진이 계산한 검증된 사실. AI 의 유일한 그라운딩 소스다(FR-AI-02)
      * @return 서술 결과 — 검증 실패해도 {@code null} 을 반환하지 않는다(H1)
@@ -158,7 +167,11 @@ public class AiService {
      */
     @Transactional(readOnly = true)
     public ExplainOutcome explain(
-            UUID userId, boolean demo, String surface, Map<String, Object> facts) {
+            UUID userId,
+            boolean demo,
+            String clientIp,
+            String surface,
+            Map<String, Object> facts) {
         Objects.requireNonNull(userId, "userId");
         Objects.requireNonNull(surface, "surface");
         Objects.requireNonNull(facts, "facts");
@@ -183,10 +196,25 @@ public class AiService {
             // 검증값을 true 로 싣는 것은 상수를 채워 넣는 것이 아니다(이슈 #122 와 다른 경우다):
             // 담긴 문장은 저장될 때 두 검사를 통과했고, 두 검사는 (sentences, facts) 만의 함수인데
             // 그 둘을 키가 고정한다 — 지금 다시 돌려도 같은 결과다.
-            record(startedAt, userId, demo, surface, null, TokenUsage.NONE,
+            record(startedAt, userId, demo, clientIp, surface, null, TokenUsage.NONE,
                     AiCallOutcome.CACHE_HIT, null, null);
             return new ExplainOutcome(cached.get(), explainLevel, explainDomain, false,
                     true, true, List.of(), null);
+        }
+
+        // 쿼터는 캐시 조회 <b>뒤</b>다(이슈 #140). 순서가 규약이다 — 캐시 히트는 비용이 0 이므로
+        // 쿼터를 소모해서도 안 되고, 쿼터에 막혀서도 안 된다. 담아 둔 문장을 그냥 주는 것이
+        // 폴백 템플릿을 주는 것보다 언제나 낫다.
+        Optional<AiCallQuota.Layer> exceeded = aiCallQuota.exceededLayer(userId, demo, clientIp);
+        if (exceeded.isPresent()) {
+            FallbackReason reason = reasonOf(exceeded.get());
+            // 프로바이더를 부르지 않았으므로 비용은 0 이다. 그래도 행을 남긴다 — 남기지 않으면
+            // 관리자 화면에서 호출량이 줄어든 것이 "쿼터가 듣는다" 인지 "트래픽이 없다" 인지
+            // 구분되지 않는다. outcome 이 quota_blocked 여서 이 행은 쿼터 카운트에도 빠진다.
+            record(startedAt, userId, demo, clientIp, surface, null, TokenUsage.NONE,
+                    AiCallOutcome.QUOTA_BLOCKED, reason.code(), null);
+            return new ExplainOutcome(FALLBACK_SENTENCES, explainLevel, explainDomain, true,
+                    null, null, List.of(), reason);
         }
 
         Instant deadline = startedAt.plus(totalBudget);
@@ -255,7 +283,7 @@ public class AiService {
             if (numericMatch && regimeDisclosed) {
                 // 통과한 것만 담는다 — 폴백을 담으면 일시적 provider 장애가 TTL 동안 고정된다.
                 explainResultCache.put(cacheKey, sentences);
-                record(startedAt, userId, demo, surface, model, totalUsage,
+                record(startedAt, userId, demo, clientIp, surface, model, totalUsage,
                         AiCallOutcome.SUCCESS, null, null);
                 return new ExplainOutcome(
                         sentences, explainLevel, explainDomain, false, true, true, List.of(), null);
@@ -272,8 +300,12 @@ public class AiService {
         // 폴백도 기록한다(이슈 #143) — 토큰은 이미 소모됐을 수 있고(검증 실패 경로), 실패가 어느
         // 사유로 몇 번 일어났는지가 비용 판단의 절반이다. 남기지 않으면 관리자 화면에서 호출량이
         // 줄어든 것이 "캐시가 잘 듣는다" 인지 "장애로 폴백 중" 인지 구분되지 않는다.
-        record(startedAt, userId, demo, surface, model, totalUsage, AiCallOutcome.FALLBACK,
-                fallbackReason, AiCallLogRecorder.summarize(providerError));
+        // fallbackReason 은 여기서 항상 non-null 이다 — 이 지점에 이르는 네 경로(예산 소진 ·
+        // provider 예외 · 금지 표현 · 검증 실패)가 모두 사유를 설정하고, MAX_ATTEMPTS 가 1 이상이라
+        // 루프 본문은 최소 한 번 돈다. 그래서 null 검사를 두지 않는다.
+        record(startedAt, userId, demo, clientIp, surface, model, totalUsage,
+                AiCallOutcome.FALLBACK, fallbackReason.code(),
+                AiCallLogRecorder.summarize(providerError));
 
         return new ExplainOutcome(FALLBACK_SENTENCES, explainLevel, explainDomain, true,
                 numericMatch, regimeDisclosed, blockedPhrases, fallbackReason);
@@ -298,24 +330,41 @@ public class AiService {
             Instant startedAt,
             UUID userId,
             boolean demo,
+            String clientIp,
             String surface,
             String model,
             TokenUsage usage,
             AiCallOutcome outcome,
-            FallbackReason fallbackReason,
+            String fallbackReason,
             String errorSummary) {
         int latencyMs = (int) Duration.between(startedAt, clock.instant()).toMillis();
         aiCallLogRecorder.record(AiCallLog.narrate(
                 startedAt,
                 userId,
                 demo,
+                clientIp,
                 surface,
                 model,
                 usage,
                 outcome,
-                fallbackReason == null ? null : fallbackReason.code(),
+                fallbackReason,
                 latencyMs,
                 errorSummary));
+    }
+
+    /**
+     * 쿼터 층을 폴백 사유로 옮긴다 (이슈 #140).
+     *
+     * <p>두 어휘를 하나로 두지 않고 여기서 옮기는 이유는 의존 방향이다 — {@link AiCallQuota} 가
+     * {@code FallbackReason} 을 직접 돌려주면 이 클래스와 서로를 참조한다. 코드 문자열이 어긋나지
+     * 않는 것은 {@code AiCallVocabularyTest} 가 지킨다.
+     */
+    private static FallbackReason reasonOf(AiCallQuota.Layer layer) {
+        return switch (layer) {
+            case USER -> FallbackReason.QUOTA_USER;
+            case IP -> FallbackReason.QUOTA_IP;
+            case GLOBAL -> FallbackReason.QUOTA_GLOBAL;
+        };
     }
 
     /**
@@ -354,7 +403,21 @@ public class AiService {
         BUDGET_EXHAUSTED,
 
         /** 수치 대조 또는 급변 구간 고지 검사에 걸렸다. 어느 쪽인지는 두 측정값이 말한다. */
-        VERIFICATION_FAILED;
+        VERIFICATION_FAILED,
+
+        /**
+         * 이 사용자가 24시간 상한을 다 썼다 (이슈 #140). 데모 세션은 더 낮은 상한을 쓴다.
+         *
+         * <p>쿼터 세 값은 앞의 넷과 성질이 다르다 — <b>프로바이더를 아예 부르지 않았다.</b>
+         * 그래서 {@code numeric_match}·{@code regime_disclosed} 가 {@code null} 이고 토큰이 0 이다.
+         */
+        QUOTA_USER,
+
+        /** 이 IP 에서 온 호출이 상한을 넘었다. 위조 가능한 헤더에 기대므로 과속방지턱이다. */
+        QUOTA_IP,
+
+        /** 서비스 전체가 24시간 상한을 넘었다 — 킬스위치가 발동해 전건이 폴백한다. */
+        QUOTA_GLOBAL;
 
         /** API 응답에 싣는 snake_case 코드 — DB 컬럼·응답 필드와 같은 표기를 쓴다(§5 네이밍). */
         public String code() {

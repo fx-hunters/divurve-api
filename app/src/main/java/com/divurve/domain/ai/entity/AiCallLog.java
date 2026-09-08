@@ -49,6 +49,19 @@ public class AiCallLog {
     @Column(name = "is_demo", nullable = false)
     private boolean isDemo;
 
+    /**
+     * 요청 출처 IP (이슈 #140). IP당 쿼터의 <b>유일한</b> 근거다.
+     *
+     * <p>알 수 없으면 {@code null} 이다 — {@code ClientIpArgumentResolver} 가 헤더도 소켓 주소도
+     * 쓸 수 없을 때 그렇게 준다. 지어낸 문자열을 넣지 않는다: {@code null} 인 행은 IP 층 카운트에서
+     * 그냥 빠지고, 그것이 "출처를 모르는 요청을 IP 로 묶어 엉뚱한 사람을 차단하는" 것보다 낫다.
+     *
+     * <p><b>위조 가능한 값이다.</b> {@code X-Forwarded-For} 는 클라이언트가 보내는 헤더이므로 이
+     * 값에 기대는 쿼터는 과속방지턱이고, 실제 상한은 전역 킬스위치다.
+     */
+    @Column(name = "client_ip", length = 45)
+    private String clientIp;
+
     @Column(name = "purpose", nullable = false, length = 16)
     private String purpose;
 
@@ -96,6 +109,7 @@ public class AiCallLog {
             UUID userId,
             boolean isDemo,
             AiCallPurpose purpose,
+            String clientIp,
             String surface,
             String model,
             TokenUsage usage,
@@ -107,6 +121,7 @@ public class AiCallLog {
         this.userId = userId;
         this.isDemo = isDemo;
         this.purpose = purpose.code();
+        this.clientIp = clientIp;
         this.surface = surface;
         this.model = model;
         this.inputTokens = usage.inputTokens();
@@ -124,6 +139,7 @@ public class AiCallLog {
      *
      * @param userId         요청한 사용자
      * @param isDemo         데모 세션의 요청인지 — 데모 트래픽 비중이 비용 분석의 핵심 축이다
+     * @param clientIp       요청 출처 IP. IP당 쿼터의 근거다(이슈 #140). 알 수 없으면 {@code null}
      * @param surface        서술 대상 화면
      * @param model          호출한 모델. 모델별 단가가 다르므로 반드시 남긴다
      * @param usage          토큰 사용량. 실 호출이 없었으면 {@link TokenUsage#NONE}
@@ -136,6 +152,7 @@ public class AiCallLog {
             Instant requestedAt,
             UUID userId,
             boolean isDemo,
+            String clientIp,
             String surface,
             String model,
             TokenUsage usage,
@@ -143,8 +160,8 @@ public class AiCallLog {
             String fallbackReason,
             Integer latencyMs,
             String errorSummary) {
-        return new AiCallLog(requestedAt, userId, isDemo, AiCallPurpose.NARRATE, surface, model,
-                usage, outcome, fallbackReason, latencyMs, errorSummary);
+        return new AiCallLog(requestedAt, userId, isDemo, AiCallPurpose.NARRATE, clientIp, surface,
+                model, usage, outcome, fallbackReason, latencyMs, errorSummary);
     }
 
     /**
@@ -159,7 +176,8 @@ public class AiCallLog {
             AiCallOutcome outcome,
             Integer latencyMs,
             String errorSummary) {
-        return new AiCallLog(requestedAt, userId, false, AiCallPurpose.EXTRACT, null, model,
+        // 배치는 요청 출처가 없다 — 스케줄러가 스스로 돈다.
+        return new AiCallLog(requestedAt, userId, false, AiCallPurpose.EXTRACT, null, null, model,
                 usage, outcome, null, latencyMs, errorSummary);
     }
 
@@ -177,6 +195,10 @@ public class AiCallLog {
 
     public boolean isDemo() {
         return isDemo;
+    }
+
+    public String getClientIp() {
+        return clientIp;
     }
 
     public String getPurpose() {
