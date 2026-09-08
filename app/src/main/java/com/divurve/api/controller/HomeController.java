@@ -8,9 +8,11 @@ import com.divurve.api.dto.home.HomeSummaryResponse.BlockDto;
 import com.divurve.api.dto.home.HomeSummaryResponse.FxStatusDto;
 import com.divurve.api.dto.home.HomeSummaryResponse.ForecastDto;
 import com.divurve.api.dto.home.HomeSummaryResponse.GoalsRouteDto;
+import com.divurve.api.dto.home.HomeSummaryResponse.HistoryPointDto;
 import com.divurve.api.dto.home.HomeSummaryResponse.Interval80Dto;
 import com.divurve.api.dto.home.HomeSummaryResponse.ProfileFitDto;
 import com.divurve.api.dto.home.HomeSummaryResponse.TodayDto;
+import com.divurve.api.dto.xray.XrayResponse;
 import com.divurve.api.config.auth.CurrentUser;
 import com.divurve.common.architecture.WebAdapter;
 import com.divurve.common.response.ApiResponse;
@@ -20,6 +22,7 @@ import com.divurve.domain.home.HomeSummaryService.HomeSummaryView;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import java.util.List;
 import java.util.UUID;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -68,7 +71,8 @@ public class HomeController {
                         view.fxStatus().fxRatio(),
                         view.fxStatus().topCurrencyCode(),
                         view.fxStatus().sensitivity1pctKrw(),
-                        view.fxStatus().dayChangeKrw()),
+                        view.fxStatus().dayChangeKrw(),
+                        toExposure(view.fxStatus())),
                 new GoalsRouteDto(
                         view.goalsRoute().activeGoals().stream()
                                 .map(goal -> new ActiveGoalDto(
@@ -87,6 +91,28 @@ public class HomeController {
                                 view.forecast().pairCode(),
                                 view.forecast().currentRate(),
                                 new Interval80Dto(
-                                        view.forecast().interval80().lo(), view.forecast().interval80().hi())));
+                                        view.forecast().interval80().lo(), view.forecast().interval80().hi()),
+                                toHistory(view.forecast())));
+    }
+
+    /**
+     * {@code GET /xray} 의 {@code exposure[]} 와 동일한 조합 규칙 — {@link XrayController} 의
+     * 매핑을 그대로 따른다(이슈 #94). 새 계산이 아니라 {@link HomeSummaryService} 가 이미 조회한
+     * {@code XrayService.PortfolioSnapshot} 유래 값을 그대로 옮긴다.
+     */
+    private List<XrayResponse.Exposure> toExposure(HomeSummaryService.FxStatusView fxStatus) {
+        return fxStatus.currencyToAssetKrw().entrySet().stream()
+                .map(entry -> new XrayResponse.Exposure(
+                        entry.getKey(),
+                        entry.getValue(),
+                        fxStatus.exposureShare().getOrDefault(entry.getKey(), 0.0)))
+                .toList();
+    }
+
+    /** {@code forecast.history} 스파크라인 매핑 — {@link HomeSummaryService} 가 이미 30영업일로 잘라 둔다. */
+    private List<HistoryPointDto> toHistory(HomeSummaryService.ForecastSummaryView forecast) {
+        return forecast.history().stream()
+                .map(point -> new HistoryPointDto(point.date(), point.rate()))
+                .toList();
     }
 }

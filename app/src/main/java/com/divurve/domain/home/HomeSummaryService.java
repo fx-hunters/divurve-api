@@ -6,6 +6,7 @@ import com.divurve.common.exception.NotFoundException;
 import com.divurve.domain.forecast.ForecastService;
 import com.divurve.domain.forecast.ForecastService.EconomicEventView;
 import com.divurve.domain.forecast.ForecastService.ForecastView;
+import com.divurve.domain.forecast.ForecastService.HistoryPoint;
 import com.divurve.domain.goal.GoalService;
 import com.divurve.domain.goal.entity.Goal;
 import com.divurve.domain.market.MarketRegimeService;
@@ -20,6 +21,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import org.springframework.transaction.annotation.Transactional;
@@ -56,6 +58,14 @@ public class HomeSummaryService {
 
     /** {@code attention.upcoming_events} 로 좁히는 임박 기준(일) — 화면 v2 §11 "임박 일정". */
     private static final int UPCOMING_EVENT_WINDOW_DAYS = 14;
+
+    /**
+     * {@code forecast.history} 로 잘라내는 스파크라인 관측 수(영업일) — 이슈 #94.
+     * {@link ForecastService} 가 이미 최근 90영업일을 들고 있으므로(내부 {@code HISTORY_POINTS}),
+     * 그중 홈 화면 4~5주 추세 스파크라인에 필요한 만큼만 꼬리에서 잘라 홈 응답 크기를 줄인다.
+     * {@code /forecast} 전체 {@code history} 와는 별개이며 새 계산이 아니다.
+     */
+    private static final int FORECAST_HISTORY_SPARKLINE_POINTS = 30;
 
     private final UserRepository userRepository;
     private final XrayService xrayService;
@@ -136,7 +146,9 @@ public class HomeSummaryService {
                 portfolio.fxRatio(),
                 portfolio.concentration().topCurrencyCode(),
                 portfolio.sensitivity1pct().totalKrw(),
-                portfolio.dayChangeKrw());
+                portfolio.dayChangeKrw(),
+                portfolio.currencyToAssetKrw(),
+                portfolio.exposure());
     }
 
     /**
@@ -177,7 +189,8 @@ public class HomeSummaryService {
             ForecastSummaryView view = new ForecastSummaryView(
                     forecast.pairCode(),
                     forecast.currentRate(),
-                    new IntervalView(forecast.interval80().lo(), forecast.interval80().hi()));
+                    new IntervalView(forecast.interval80().lo(), forecast.interval80().hi()),
+                    sparklineHistory(forecast.history()));
             return new ForecastBlockResult(view, STATE_FILLED);
         } catch (InvalidRequestException e) {
             // 관측 부족 등 계산 불가 사유 — 빈 블록으로 처리하고 화면 이용을 막지 않는다.
@@ -186,6 +199,15 @@ public class HomeSummaryService {
     }
 
     private record ForecastBlockResult(ForecastSummaryView view, String state) {
+    }
+
+    /**
+     * {@link ForecastService}가 이미 들고 있는 관측에서 홈 스파크라인용 최근
+     * {@link #FORECAST_HISTORY_SPARKLINE_POINTS}영업일만 꼬리에서 자른다 — 새 조회·계산이 아니다.
+     */
+    private List<HistoryPoint> sparklineHistory(List<HistoryPoint> history) {
+        int from = Math.max(0, history.size() - FORECAST_HISTORY_SPARKLINE_POINTS);
+        return history.subList(from, history.size());
     }
 
     /**
@@ -219,9 +241,17 @@ public class HomeSummaryService {
     public record ProfileFitView(String grade, String concentrationStatus) {
     }
 
-    /** 외화 현황 — 비중·주력 통화·민감도·전일 대비. */
+    /**
+     * 외화 현황 — 비중·주력 통화·민감도·전일 대비·통화별 노출.
+     *
+     * @param currencyToAssetKrw 통화코드 → 원화 평가액 (평가액 내림차순). {@code GET /xray} 의
+     *                           {@code exposure[].krw} 와 같은 산출물(이슈 #94) — 새로 계산하지 않는다
+     * @param exposureShare      통화코드 → 외화자산 대비 비중 (0~1). {@code GET /xray} 의
+     *                           {@code exposure[].share} 와 같은 산출물
+     */
     public record FxStatusView(
-            double fxRatio, String topCurrencyCode, long sensitivity1pctKrw, Long dayChangeKrw) {
+            double fxRatio, String topCurrencyCode, long sensitivity1pctKrw, Long dayChangeKrw,
+            Map<String, Long> currencyToAssetKrw, Map<String, Double> exposureShare) {
     }
 
     /** 목표 영역. {@code routeEnabled} 는 이슈 #84 에서 제거했다 — 항상 켜져 있다. */
@@ -238,8 +268,14 @@ public class HomeSummaryService {
     public record AttentionView(String regimeBadge, List<EconomicEventView> upcomingEvents) {
     }
 
-    /** Forecast 요약 — 계산 불가 시 {@code null}. */
-    public record ForecastSummaryView(String pairCode, double currentRate, IntervalView interval80) {
+    /**
+     * Forecast 요약 — 계산 불가 시 {@code null}.
+     *
+     * @param history 스파크라인용 최근 {@value #FORECAST_HISTORY_SPARKLINE_POINTS}영업일
+     *                (시간순, {@code /forecast} 전체 {@code history} 의 부분집합)
+     */
+    public record ForecastSummaryView(
+            String pairCode, double currentRate, IntervalView interval80, List<HistoryPoint> history) {
     }
 
     /** 80퍼센트 예측 구간. */
