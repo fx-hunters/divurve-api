@@ -31,7 +31,7 @@ class AnthropicMessageClientTest {
     private final AnthropicClient client = mock(AnthropicClient.class);
     private final MessageService messageService = mock(MessageService.class);
     private final AnthropicProperties props =
-            new AnthropicProperties(true, "sk-ant-test", "claude-opus-5", 777, null, null);
+            new AnthropicProperties(true, false, "sk-ant-test", "claude-opus-5", 777, null);
 
     private final AnthropicMessageClient sut = new AnthropicMessageClient(client, props);
 

@@ -26,7 +26,7 @@ class ClaudeEconEventExtractorTest {
     private final ObjectMapper mapper = new ObjectMapper();
     private final StubMessageClient messageClient = new StubMessageClient();
     private final AnthropicProperties props =
-        new AnthropicProperties(true, "sk-ant-test", null, 0, null, null);
+        new AnthropicProperties(true, true, "sk-ant-test", null, 0, null);
 
     private final ClaudeEconEventExtractor sut =
         new ClaudeEconEventExtractor(messageClient, mapper, props);
