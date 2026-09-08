@@ -45,7 +45,10 @@ public record FitResponse(
     }
 
     /** 집중도 진단 (명세 §5.5). */
-    @Schema(description = "집중도")
+    @Schema(name = "FitConcentration",
+            description = "성향-집중도 관계 판정에 쓰이는 집중도 (Relation.facts 와 짝을 이룬다). "
+                    + "XrayResponse.Concentration·FitPreviewResponse.Concentration 과 필드 구성이 달라 "
+                    + "이름을 분리했다(이슈 #88)")
     public record Concentration(
             @Schema(description = "주력 통화. 외화자산이 없으면 null", example = "USD", nullable = true)
             String topCurrencyCode,

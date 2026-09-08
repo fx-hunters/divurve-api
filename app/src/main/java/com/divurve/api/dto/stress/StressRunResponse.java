@@ -74,7 +74,9 @@ public record StressRunResponse(
      * @param referenceEvent 참고한 실제 사건
      * @param assumptionNote 적용 순서·가정 설명
      */
-    @Schema(description = "적용한 시나리오 (가정 공개용)")
+    @Schema(name = "StressRunScenario",
+            description = "실행 결과에 동반되는 시나리오 설명 (가정 공개용). 충격률을 담는 "
+                    + "ScenarioListResponse.Scenario 와 구조가 달라 이름을 분리했다(이슈 #88)")
     public record Scenario(
             String scenarioCode,
             String nameKo,

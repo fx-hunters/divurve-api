@@ -2,6 +2,7 @@ package com.divurve.api.dto.route;
 
 import com.divurve.domain.route.RouteContext;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import io.swagger.v3.oas.annotations.media.Schema;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.Map;
@@ -89,6 +90,9 @@ public record RouteContextResponse(
         }
 
         /** 구간 하단·상단. */
+        @Schema(name = "RouteForecastInterval",
+                description = "경로 컨텍스트가 참고하는 예측 구간 하단·상단. 폭 비율까지 담는 "
+                        + "ForecastResponse.Interval 과 구조가 달라 이름을 분리했다(이슈 #88)")
         public record Interval(Double lo, Double hi) {
 
             static Interval from(RouteContext.Forecast.Interval source) {

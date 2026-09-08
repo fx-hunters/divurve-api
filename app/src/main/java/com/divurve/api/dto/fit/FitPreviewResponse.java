@@ -31,14 +31,19 @@ public record FitPreviewResponse(
         @JsonProperty("sensitivity_1pct") Sensitivity sensitivity1pct) {
 
     /** 가정 전후의 통화별 비중. */
-    @Schema(description = "통화별 비중 전후")
+    @Schema(name = "ExposureComparison",
+            description = "통화별 비중 전후 비교(before/after 맵). 단일 시점을 표현하는 "
+                    + "XrayResponse.Exposure 와 구조가 달라 이름을 분리했다(이슈 #88)")
     public record Exposure(
             @Schema(description = "통화코드 → 비중") Map<String, Double> before,
             @Schema(description = "통화코드 → 비중") Map<String, Double> after) {
     }
 
     /** 가정 전후의 집중도. 기준선은 가정으로 바뀌지 않으므로 하나만 싣는다. */
-    @Schema(description = "집중도 전후")
+    @Schema(name = "ConcentrationComparison",
+            description = "집중도 전후 비교(before/after Snapshot + 공통 threshold). "
+                    + "단일 시점을 표현하는 XrayResponse.Concentration·FitResponse.Concentration 과 "
+                    + "구조가 달라 이름을 분리했다(이슈 #88)")
     public record Concentration(
             @Schema(description = "가정 전") Snapshot before,
             @Schema(description = "가정 후") Snapshot after,
@@ -63,7 +68,10 @@ public record FitPreviewResponse(
      * ({@code {"USD": 157900, ..., "total_krw": 247200}}). 재배분은 외화자산 총액을 보존하므로
      * {@code total_krw} 는 가정 전후가 같다.
      */
-    @Schema(description = "민감도 전후 (통화코드 키 + total_krw)")
+    @Schema(name = "SensitivityComparison",
+            description = "민감도 전후 비교(before/after 맵, 통화코드 키 + total_krw). "
+                    + "단일 시점을 표현하는 XrayResponse.Sensitivity 와 구조가 달라 "
+                    + "이름을 분리했다(이슈 #88)")
     public record Sensitivity(
             @Schema(description = "가정 전 통화별 민감도와 total_krw") Map<String, Long> before,
             @Schema(description = "가정 후 통화별 민감도와 total_krw") Map<String, Long> after) {

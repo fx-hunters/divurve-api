@@ -127,7 +127,9 @@ public record ForecastResponse(
      * @param hi       상단
      * @param widthPct 기준선 대비 폭 비율
      */
-    @Schema(description = "지평 끝 80퍼센트 구간")
+    @Schema(name = "ForecastInterval",
+            description = "지평 끝 80퍼센트 구간 — 하단·상단과 기준선 대비 폭. 폭 없이 하단·상단만 담는 "
+                    + "RouteContextResponse.Forecast.Interval 과 구조가 달라 이름을 분리했다(이슈 #88)")
     public record Interval(
             @Schema(example = "1345.61") double lo,
             @Schema(example = "1420.19") double hi,
