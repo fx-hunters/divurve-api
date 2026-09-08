@@ -19,11 +19,27 @@ app:
       api-key: ""
     fred:
       api-key: ""
-    # AI 설명을 실 Claude API 로 받으려면 enabled: true + api-key 를 채운다 (이슈 #73).
+    # AI 설명을 실 Claude API 로 받으려면 api-key 를 채우고 enabled 를 켠다 (이슈 #73).
     # 비워 두면 MockAiProvider 의 템플릿 문장이 그대로 나간다 — 화면은 정상 동작한다.
     # 발급: https://console.anthropic.com/settings/keys
+    #
+    # enabled 는 리터럴이 아니라 환경변수로 받는다 — 켜 둔 채 잊으면 기동·테스트만으로도
+    # 과금된다. 실측할 때만 그 실행에 한해 켜는 편이 안전하다.
+    #
+    # 나머지 값(model · effort · max-tokens · request-timeout · total-budget)은 여기 적지
+    # 않는다. application.yml 이 이미 ${ANTHROPIC_*:기본값} 으로 받고 있고 dev 는 그것을
+    # 상속하므로, 환경변수만으로 조절된다. 여기 리터럴로 다시 적으면 그 값이 환경변수를
+    # 이겨서 "환경변수를 바꿨는데 안 먹는다" 가 된다(이슈 #123 이 운영에서 겪은 것과 같은 함정).
+    #
+    #   ANTHROPIC_ENABLED=true ANTHROPIC_MODEL=claude-sonnet-5 \
+    #   ANTHROPIC_REQUEST_TIMEOUT=60s ANTHROPIC_TOTAL_BUDGET=60s \
+    #   ./gradlew bootRun
+    #
+    # 지연을 잴 때 타임아웃을 크게 잡는 이유 — 기본 12s 로 두면 느린 모델이 폴백해
+    # 버려서 재려던 값이 12,000ms 로만 찍힌다. 끊기지 않게 두고 재야 실측이 된다.
+    # 측정 결과는 GET /api/v1/admin/ai/calls 의 latency_ms · output_tokens 로 본다.
     anthropic:
-      enabled: false
+      enabled: ${ANTHROPIC_ENABLED:false}
       api-key: ""
 
 spring:
