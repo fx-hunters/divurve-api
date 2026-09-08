@@ -119,8 +119,8 @@ public class ExternalDataConfig {
         return manager;
     }
 
-    // FxRateHistoryProvider(EcosFxRateHistoryProvider) · EconomicEventProvider(MockEconomicEventProvider) ·
-    // ForecastService 를 여기서 @Bean 으로 다시 만들지 않는다. 세 구현체 모두 @ExternalAdapter / @UseCase
+    // FxRateHistoryProvider(EcosFxRateHistoryProvider) · ForecastService 를 여기서 @Bean 으로 다시
+    // 만들지 않는다. 두 구현체 모두 @ExternalAdapter / @UseCase
     // (각각 @Component / @Service 를 메타 어노테이션으로 갖는다)가 붙어 이미 컴포넌트 스캔 대상이므로,
     // @Bean 을 함께 두면 같은 타입의 빈이 2개가 되어 NoUniqueBeanDefinitionException 으로 기동이 실패한다(이슈 #38).
     // 다른 어댑터(EcosFxRateProvider·FredMacroProvider·MockAiProvider)도 스캔에만 의존한다.

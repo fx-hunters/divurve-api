@@ -2,6 +2,7 @@ package com.divurve.domain.home;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.divurve.api.controller.HomeController;
@@ -33,9 +34,7 @@ import com.divurve.domain.xray.XrayService.ConcentrationView;
 import com.divurve.domain.xray.XrayService.PortfolioSnapshot;
 import com.divurve.domain.xray.XrayService.SensitivityView;
 import com.divurve.domain.xray.XrayService;
-import java.time.Clock;
 import java.time.LocalDate;
-import java.time.ZoneId;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -69,8 +68,6 @@ class HomeSummaryServiceTest {
     private GoalService goalService;
 
     private static final LocalDate TODAY = LocalDate.of(2026, 9, 7);
-    private static final Clock CLOCK =
-            Clock.fixed(TODAY.atStartOfDay(ZoneId.of("Asia/Seoul")).toInstant(), ZoneId.of("Asia/Seoul"));
 
     private final UUID userId = UUID.randomUUID();
     private HomeSummaryService service;
@@ -79,7 +76,7 @@ class HomeSummaryServiceTest {
     void setUp() {
         service = new HomeSummaryService(
                 userRepository, xrayService, riskProfileService, forecastService,
-                marketRegimeService, goalService, CLOCK);
+                marketRegimeService, goalService);
     }
 
     private void stubUserExists() {
@@ -158,7 +155,7 @@ class HomeSummaryServiceTest {
         when(riskProfileService.getRiskProfile(userId)).thenReturn(riskProfileDiagnosed());
         when(forecastService.getForecast(userId, "USDKRW", ForecastService.DEFAULT_HORIZON_DAYS))
                 .thenReturn(forecastView());
-        when(forecastService.getEvents()).thenReturn(List.of());
+        when(forecastService.getEvents(14)).thenReturn(List.of());
 
         HomeSummaryService.HomeSummaryView view = service.getSummary(userId);
 
@@ -176,7 +173,7 @@ class HomeSummaryServiceTest {
         when(riskProfileService.getRiskProfile(userId)).thenReturn(riskProfileDiagnosed());
         when(forecastService.getForecast(userId, "USDKRW", ForecastService.DEFAULT_HORIZON_DAYS))
                 .thenReturn(forecastView());
-        when(forecastService.getEvents()).thenReturn(List.of());
+        when(forecastService.getEvents(14)).thenReturn(List.of());
 
         HomeSummaryService.HomeSummaryView view = service.getSummary(userId);
 
@@ -200,7 +197,7 @@ class HomeSummaryServiceTest {
         when(riskProfileService.getRiskProfile(userId)).thenReturn(riskProfileNotMeasured());
         when(forecastService.getForecast(userId, "USDKRW", ForecastService.DEFAULT_HORIZON_DAYS))
                 .thenReturn(forecastView());
-        when(forecastService.getEvents()).thenReturn(List.of());
+        when(forecastService.getEvents(14)).thenReturn(List.of());
 
         HomeSummaryService.HomeSummaryView view = service.getSummary(userId);
 
@@ -215,7 +212,7 @@ class HomeSummaryServiceTest {
         when(riskProfileService.getRiskProfile(userId)).thenReturn(riskProfileNotMeasured());
         when(forecastService.getForecast(userId, "USDKRW", ForecastService.DEFAULT_HORIZON_DAYS))
                 .thenReturn(forecastView());
-        when(forecastService.getEvents()).thenReturn(List.of());
+        when(forecastService.getEvents(14)).thenReturn(List.of());
 
         HomeSummaryService.HomeSummaryView view = service.getSummary(userId);
 
@@ -231,7 +228,7 @@ class HomeSummaryServiceTest {
         when(riskProfileService.getRiskProfile(userId)).thenReturn(riskProfileNotMeasured());
         when(forecastService.getForecast(userId, "USDKRW", ForecastService.DEFAULT_HORIZON_DAYS))
                 .thenThrow(new InvalidRequestException("변동성을 계산할 과거 관측이 부족합니다."));
-        when(forecastService.getEvents()).thenReturn(List.of());
+        when(forecastService.getEvents(14)).thenReturn(List.of());
 
         HomeSummaryService.HomeSummaryView view = service.getSummary(userId);
 
@@ -247,7 +244,7 @@ class HomeSummaryServiceTest {
         when(riskProfileService.getRiskProfile(userId)).thenReturn(riskProfileNotMeasured());
         when(forecastService.getForecast(userId, "USDKRW", ForecastService.DEFAULT_HORIZON_DAYS))
                 .thenReturn(forecastView());
-        when(forecastService.getEvents()).thenReturn(List.of());
+        when(forecastService.getEvents(14)).thenReturn(List.of());
         Goal goal = Goal.builder(User.create("a@b.com", "u", null), "여행자금", "wealth", "travel", "USD")
                 .targetAmount(1000.0)
                 .build();
@@ -269,7 +266,7 @@ class HomeSummaryServiceTest {
         when(riskProfileService.getRiskProfile(userId)).thenReturn(riskProfileNotMeasured());
         when(forecastService.getForecast(userId, "USDKRW", ForecastService.DEFAULT_HORIZON_DAYS))
                 .thenReturn(forecastView());
-        when(forecastService.getEvents()).thenReturn(List.of());
+        when(forecastService.getEvents(14)).thenReturn(List.of());
         when(goalService.listByOwner(userId)).thenReturn(List.of());
 
         HomeSummaryService.HomeSummaryView view = service.getSummary(userId);
@@ -286,9 +283,10 @@ class HomeSummaryServiceTest {
         when(riskProfileService.getRiskProfile(userId)).thenReturn(riskProfileNotMeasured());
         when(forecastService.getForecast(userId, "USDKRW", ForecastService.DEFAULT_HORIZON_DAYS))
                 .thenReturn(forecastView());
-        when(forecastService.getEvents()).thenReturn(List.of(
-                new ForecastService.EconomicEventView(TODAY.plusDays(3), "FOMC", "USD", "high"),
-                new ForecastService.EconomicEventView(TODAY.plusDays(60), "먼미래", "USD", "low")));
+        // 이슈 #162 — 창을 쿼리로 내렸으므로 서비스는 받아온 목록을 다시 거르지 않는다.
+        // 14 일이라는 창 자체를 넘기는지가 검증 대상이다.
+        when(forecastService.getEvents(14)).thenReturn(List.of(
+                new ForecastService.EconomicEventView(TODAY.plusDays(3), "FOMC", "USD", "High")));
 
         HomeSummaryService.HomeSummaryView view = service.getSummary(userId);
 
@@ -296,6 +294,7 @@ class HomeSummaryServiceTest {
         assertThat(view.attention().upcomingEvents()).extracting(
                 ForecastService.EconomicEventView::title).containsExactly("FOMC");
         assertThat(view.regime()).isEqualTo("stress");
+        verify(forecastService).getEvents(14);
     }
 
     /**
@@ -322,7 +321,7 @@ class HomeSummaryServiceTest {
         when(riskProfileService.getRiskProfile(userId)).thenReturn(riskProfileNotMeasured());
         when(forecastService.getForecast(userId, "USDKRW", ForecastService.DEFAULT_HORIZON_DAYS))
                 .thenReturn(forecastView());
-        when(forecastService.getEvents()).thenReturn(List.of());
+        when(forecastService.getEvents(14)).thenReturn(List.of());
         when(goalService.listByOwner(userId)).thenReturn(List.of());
 
         ApiResponse<HomeSummaryResponse> homeResponse = new HomeController(service).getSummary(userId);
@@ -342,7 +341,7 @@ class HomeSummaryServiceTest {
         when(riskProfileService.getRiskProfile(userId)).thenReturn(riskProfileNotMeasured());
         when(forecastService.getForecast(userId, "USDKRW", ForecastService.DEFAULT_HORIZON_DAYS))
                 .thenReturn(forecastView());
-        when(forecastService.getEvents()).thenReturn(List.of());
+        when(forecastService.getEvents(14)).thenReturn(List.of());
 
         ApiResponse<HomeSummaryResponse> response = new HomeController(service).getSummary(userId);
 
@@ -361,7 +360,7 @@ class HomeSummaryServiceTest {
                 .toList();
         when(forecastService.getForecast(userId, "USDKRW", ForecastService.DEFAULT_HORIZON_DAYS))
                 .thenReturn(forecastView(fullHistory));
-        when(forecastService.getEvents()).thenReturn(List.of());
+        when(forecastService.getEvents(14)).thenReturn(List.of());
 
         HomeSummaryService.HomeSummaryView view = service.getSummary(userId);
 
@@ -381,7 +380,7 @@ class HomeSummaryServiceTest {
                 new HistoryPoint(TODAY.minusDays(1), 1381.0));
         when(forecastService.getForecast(userId, "USDKRW", ForecastService.DEFAULT_HORIZON_DAYS))
                 .thenReturn(forecastView(shortHistory));
-        when(forecastService.getEvents()).thenReturn(List.of());
+        when(forecastService.getEvents(14)).thenReturn(List.of());
 
         HomeSummaryService.HomeSummaryView view = service.getSummary(userId);
 

@@ -18,7 +18,8 @@ import com.divurve.domain.holding.DepositRepository;
 import com.divurve.domain.holding.HoldingRepository;
 import com.divurve.domain.holding.entity.Deposit;
 import com.divurve.domain.holding.entity.Holding;
-import com.divurve.domain.port.EconomicEventProvider;
+import com.divurve.domain.event.EconEventRepository;
+import com.divurve.domain.event.entity.EconEvent;
 import com.divurve.domain.port.FxRateHistoryProvider;
 import com.divurve.domain.port.FxRateProvider;
 import com.divurve.domain.port.RateSnapshot;
@@ -64,7 +65,7 @@ class ForecastServiceTest {
     @Mock
     private FxRateHistoryProvider historyProvider;
     @Mock
-    private EconomicEventProvider eventProvider;
+    private EconEventRepository econEventRepository;
     @Mock
     private HoldingRepository holdingRepository;
     @Mock
@@ -80,7 +81,7 @@ class ForecastServiceTest {
                 new CrossRateResolver(StoredFxRates.NONE, historyProvider, perUnitFxRates,
                         new CrossRateDeriver(), new QuoteUnitNormalizer()),
                 perUnitFxRates,
-                eventProvider,
+                econEventRepository,
                 holdingRepository,
                 depositRepository,
                 new RegimeClassifier(),
@@ -384,24 +385,50 @@ class ForecastServiceTest {
     }
 
     @Test
-    @DisplayName("경제 일정은 어댑터가 준 사실만 옮긴다")
+    @DisplayName("경제 일정은 저장된 사실만 옮긴다 — region·impact 를 응답 어휘로 바꾼다")
     void events() {
-        when(eventProvider.fetchUpcoming(TODAY, 90)).thenReturn(List.of(
-                new EconomicEventProvider.EconomicEvent(
-                        LocalDate.of(2026, 9, 17), "FOMC", "USD", "high")));
+        when(econEventRepository.findByEventDateBetweenOrderByEventDateAsc(TODAY, TODAY.plusDays(90)))
+                .thenReturn(List.of(econEvent(LocalDate.of(2026, 9, 17), "US", "FOMC", (short) 3)));
 
         List<ForecastService.EconomicEventView> events = service.getEvents();
 
         assertEquals(1, events.size());
         assertEquals("FOMC", events.get(0).title());
         assertEquals("USD", events.get(0).currencyCode());
-        assertEquals("high", events.get(0).importance());
+        assertEquals("High", events.get(0).importance());
         assertEquals(LocalDate.of(2026, 9, 17), events.get(0).date());
         assertFalse(ForecastService.MODEL_VERSION.isBlank());
         assertEquals(30, ForecastService.DEFAULT_HORIZON_DAYS);
     }
 
+    @Test
+    @DisplayName("조회 창을 좁히면 그 구간만 쿼리한다 — 받아서 다시 거르지 않는다")
+    void eventsWithinDays() {
+        when(econEventRepository.findByEventDateBetweenOrderByEventDateAsc(TODAY, TODAY.plusDays(14)))
+                .thenReturn(List.of(econEvent(TODAY.plusDays(3), "JP", "BOJ 금융정책결정회의", (short) 2)));
+
+        List<ForecastService.EconomicEventView> events = service.getEvents(14);
+
+        assertEquals(1, events.size());
+        assertEquals("JPY", events.get(0).currencyCode());
+        assertEquals("Medium", events.get(0).importance());
+    }
+
+    @Test
+    @DisplayName("저장분이 비면 빈 목록이다 — 일정을 지어내지 않는다")
+    void eventsEmpty() {
+        when(econEventRepository.findByEventDateBetweenOrderByEventDateAsc(TODAY, TODAY.plusDays(90)))
+                .thenReturn(List.of());
+
+        assertEquals(List.of(), service.getEvents());
+    }
+
     // ── 픽스처 ───────────────────────────────────────────────────
+
+    /** {@code econ_events} 한 행. 출처는 조회 경로에 영향이 없어 추출분으로 고정한다. */
+    private static EconEvent econEvent(LocalDate date, String region, String title, short impact) {
+        return EconEvent.extracted(date, region, title, impact, "https://example.test/e", Instant.EPOCH);
+    }
 
     private void givenHistory(List<FxRateHistoryProvider.HistoryRateSnapshot> history) {
         lenient().when(historyProvider.fetchHistorical(eq("USD_KRW"), any(LocalDate.class), anyInt()))
