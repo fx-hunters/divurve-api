@@ -18,10 +18,12 @@ import com.divurve.domain.xray.XrayService;
 import com.divurve.domain.xray.XrayService.PortfolioSnapshot;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -57,6 +59,9 @@ public class HomeSummaryService {
 
     /** {@code attention.upcoming_events} 로 좁히는 임박 기준(일) — 화면 v2 §11 "임박 일정". */
     private static final int UPCOMING_EVENT_WINDOW_DAYS = 14;
+
+    /** 원화. 외화 평가액 맵에는 없으므로 보유 통화를 셀 때 따로 더한다(이슈 #166). */
+    private static final String KRW = "KRW";
 
     /**
      * {@code forecast.history} 로 잘라내는 스파크라인 관측 수(영업일) — 이슈 #94.
@@ -109,7 +114,7 @@ public class HomeSummaryService {
         ProfileFitView profileFit = resolveProfileFit(riskProfile, portfolio);
         FxStatusView fxStatus = resolveFxStatus(portfolio);
         GoalsRouteView goalsRoute = resolveGoalsRoute(userId);
-        AttentionView attention = resolveAttention(regime);
+        AttentionView attention = resolveAttention(regime, portfolio);
 
         List<BlockView> blocks = List.of(
                 new BlockView(1, BLOCK_TODAY, STATE_FILLED),
@@ -166,10 +171,56 @@ public class HomeSummaryService {
         return new GoalsRouteView(activeGoals, activeGoals.isEmpty() ? STATE_EMPTY : STATE_FILLED);
     }
 
-    private AttentionView resolveAttention(MarketRegimeView regime) {
-        // 조회 창을 쿼리로 내린다(이슈 #162) — 예전에는 90일치를 받아 여기서 다시 걸렀다.
-        return new AttentionView(
-                regime.badge(), forecastService.getEvents(UPCOMING_EVENT_WINDOW_DAYS));
+    /**
+     * 주의 필요 블록. 조회 창은 쿼리로 내려 있고(이슈 #162), 여기서는 <b>보유 통화</b>로 좁힌다
+     * (이슈 #166).
+     *
+     * <p>이 화면은 시장 브리핑이 아니라 "오늘 알아야 할 <b>개인</b> 금융 상태" 다(화면 v2 §11).
+     * 내가 들고 있지도 않은 통화의 일정은 내 금융 상태가 아니다 — USD 만 가진 사용자에게 일본은행
+     * 회의를 보여주지 않는다.
+     *
+     * <p><b>새 조회를 하지 않는다.</b> 보유 통화는 {@code getSummary} 가 이미 받아 둔
+     * {@link PortfolioSnapshot} 에 들어 있다.
+     */
+    private AttentionView resolveAttention(MarketRegimeView regime, PortfolioSnapshot portfolio) {
+        List<EconomicEventView> upcoming = forecastService.getEvents(UPCOMING_EVENT_WINDOW_DAYS);
+        return new AttentionView(regime.badge(), filterByHoldings(upcoming, portfolio));
+    }
+
+    /**
+     * 보유 통화에 걸린 일정만 남긴다 (이슈 #166).
+     *
+     * <p>두 가지가 그대로 통과한다:
+     * <ul>
+     *   <li>{@code currencyCode} 가 {@code null} 인 일정 — 특정 통화에 귀속되지 않는다는 것은
+     *       "무관하다" 가 아니라 "전부에 걸린다" 다(#162 에서 {@code GLOBAL} 을 {@code null} 로
+     *       정할 때 둔 규약)</li>
+     *   <li><b>보유 자산이 하나도 없는 사용자</b> — 아직 자산을 등록하지 않은 사람에게 "주의할
+     *       것이 없다" 고 말하는 것은 사실과 다르다. 거를 기준이 없으면 거르지 않는다</li>
+     * </ul>
+     */
+    private List<EconomicEventView> filterByHoldings(
+            List<EconomicEventView> events, PortfolioSnapshot portfolio) {
+        Set<String> heldCurrencies = heldCurrencies(portfolio);
+        if (heldCurrencies.isEmpty()) {
+            return events;
+        }
+        return events.stream()
+                .filter(event -> event.currencyCode() == null
+                        || heldCurrencies.contains(event.currencyCode()))
+                .toList();
+    }
+
+    /**
+     * 사용자가 실제로 들고 있는 통화. 외화는 평가액 맵의 키이고, 원화 자산이 있으면 {@code KRW}
+     * 를 더한다 — 한국은행 금통위는 원화 보유자에게 유의미하다.
+     */
+    private Set<String> heldCurrencies(PortfolioSnapshot portfolio) {
+        Set<String> held = new LinkedHashSet<>(portfolio.currencyToAssetKrw().keySet());
+        if (portfolio.krwAssetKrw() > 0) {
+            held.add(KRW);
+        }
+        return held;
     }
 
     /**
