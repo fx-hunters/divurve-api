@@ -47,6 +47,27 @@ public class ExternalDataConfig {
     static final List<String> EXTERNAL_CACHE_NAMES =
         List.of("fx-latest", "fx-history", "macro-latest", "currency-master");
 
+    /**
+     * AI 서술 응답 캐시 (이슈 #139). {@code EXTERNAL_CACHE_NAMES} 에 넣지 않고 아래에서 따로
+     * 등록하는 이유는 <b>TTL 이 다르기 때문</b>이다 — {@code setCaffeine} 은 매니저 전체에 하나의
+     * 스펙만 적용하므로, 6시간을 쓰는 외부 데이터 캐시와 한 통에 넣으면 서술이 6시간 고정된다.
+     */
+    public static final String EXPLAIN_CACHE_NAME = "ai-explain";
+
+    /**
+     * 서술 캐시 TTL. 같은 {@code facts} 는 언제 물어도 같은 문장이므로 값이 낡는 문제는 없다 —
+     * 이 상한은 (a) 메모리를 무한정 붙잡아 두지 않기 위한 것이고 (b) 프롬프트·모델을 바꿨을 때 옛 문장이
+     * 영구히 남지 않게 하기 위한 것이다.
+     */
+    static final Duration EXPLAIN_CACHE_TTL = Duration.ofHours(1);
+
+    /**
+     * 데모 계정은 {@code DemoSampleData} 템플릿 하나를 복제하므로 {@code facts} 가 문자 그대로
+     * 같다 — 데모 트래픽 전체가 (화면 × explain_level × explain_domain) 조합 수십 개로 수렴한다.
+     * 실 사용자 몫까지 합쳐 500개면 충분하고, 넘치면 오래된 것부터 밀린다.
+     */
+    static final long EXPLAIN_CACHE_MAX_SIZE = 500;
+
     /** 연결 타임아웃 — 외부가 응답하지 않을 때 요청 스레드를 붙잡아 두지 않는다. */
     static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(3);
 
@@ -89,6 +110,12 @@ public class ExternalDataConfig {
             .expireAfterWrite(EXTERNAL_CACHE_TTL)
             .maximumSize(EXTERNAL_CACHE_MAX_SIZE));
         manager.setCacheNames(EXTERNAL_CACHE_NAMES);
+        // 서술 캐시만 자기 TTL 로 등록한다(이슈 #139). registerCustomCache 로 넣어도
+        // getCacheNames() 에 함께 잡히므로 ExternalDataCache.evict 로 비울 수 있다.
+        manager.registerCustomCache(EXPLAIN_CACHE_NAME, Caffeine.newBuilder()
+            .expireAfterWrite(EXPLAIN_CACHE_TTL)
+            .maximumSize(EXPLAIN_CACHE_MAX_SIZE)
+            .build());
         return manager;
     }
 
