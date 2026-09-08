@@ -11,6 +11,7 @@ import com.divurve.domain.settings.RiskProfileView;
 import com.divurve.domain.user.UserRepository;
 import com.divurve.engine.concentration.ConcentrationCalculator;
 import com.divurve.engine.concentration.ConcentrationThresholdTable;
+import com.divurve.engine.diversification.DiversificationAdjustmentException;
 import com.divurve.engine.diversification.DiversificationSimulator;
 import com.divurve.engine.weight.WeightCalculator;
 import java.util.List;
@@ -126,17 +127,18 @@ public class FitService {
 
         Map<String, Long> before = currencyAssets(userId);
         long fxAssetKrw = before.values().stream().mapToLong(Long::longValue).sum();
-        if (fxAssetKrw == 0L) {
-            throw new InvalidRequestException("외화자산이 없어 가정을 적용할 수 없습니다.", FIELD_CURRENCY_CODE);
-        }
 
+        // 외화자산이 0 이어도 여기서 따로 걸러내지 않는다 — redistributeAmounts 가 같은 사유를
+        // EMPTY_PORTFOLIO 로 판정해 아래 catch 에서 field=currency_code 로 나간다. 검증을 두 곳에
+        // 두면(이 메서드와 engine) 나중에 한쪽만 바뀌어 어긋날 수 있다(이슈 #89).
         Map<String, Long> after;
         try {
             after = diversificationSimulator.redistributeAmounts(
                     before, currencyCode.toUpperCase(), deltaShare);
-        } catch (IllegalArgumentException ex) {
-            // engine 계약 위반은 사용자 입력 오류(400)로 표면화한다.
-            throw new InvalidRequestException(ex.getMessage(), FIELD_DELTA_SHARE);
+        } catch (DiversificationAdjustmentException ex) {
+            // engine 계약 위반은 사용자 입력 오류(400)로 표면화한다 — 어느 필드가 원인인지는
+            // 메시지 문자열이 아니라 engine 이 구조화해 올린 reason() 으로 판정한다(이슈 #89).
+            throw new InvalidRequestException(ex.getMessage(), fieldFor(ex.reason()));
         }
 
         Double threshold =
@@ -158,6 +160,20 @@ public class FitService {
                 threshold,
                 new SensitivityView(sensitivityBefore.totalKrw(), sensitivityBefore.byCurrency()),
                 new SensitivityView(sensitivityAfter.totalKrw(), sensitivityAfter.byCurrency()));
+    }
+
+    /**
+     * {@link DiversificationAdjustmentException.Reason} → 요청 필드 매핑 (이슈 #89).
+     *
+     * <p>대상 통화 문제({@code UNKNOWN_CURRENCY}·{@code EMPTY_PORTFOLIO})는 {@code currency_code} 가
+     * 원인이고, 조정량이 범위를 벗어난 문제({@code SHARE_OUT_OF_RANGE})만 {@code delta_share} 가
+     * 원인이다. enum 이 닫힌 집합이라 새 원인이 추가되면 컴파일이 이 메서드를 놓치지 않는다.
+     */
+    private static String fieldFor(DiversificationAdjustmentException.Reason reason) {
+        return switch (reason) {
+            case UNKNOWN_CURRENCY, EMPTY_PORTFOLIO -> FIELD_CURRENCY_CODE;
+            case SHARE_OUT_OF_RANGE -> FIELD_DELTA_SHARE;
+        };
     }
 
     private Map<String, Long> currencyAssets(UUID userId) {

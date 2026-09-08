@@ -340,34 +340,45 @@ class DiversificationSimulatorTest {
         single.put("USD", 1_000_000L);
 
         assertEquals(1_000_000L, simulator.redistributeAmounts(single, "USD", 0.0).get("USD"));
-        assertThrows(IllegalArgumentException.class,
+        DiversificationAdjustmentException exception = assertThrows(
+                DiversificationAdjustmentException.class,
                 () -> simulator.redistributeAmounts(single, "USD", 0.10));
+        assertEquals(DiversificationAdjustmentException.Reason.SHARE_OUT_OF_RANGE, exception.reason());
     }
 
     @Test
-    @DisplayName("재배분: 외화자산이 0 이면 예외")
+    @DisplayName("재배분: 외화자산이 0 이면 예외 — 원인은 EMPTY_PORTFOLIO 다(이슈 #89)")
     void 외화자산_0이면_예외() {
         Map<String, Long> empty = new LinkedHashMap<>();
         empty.put("USD", 0L);
 
-        assertThrows(IllegalArgumentException.class,
+        DiversificationAdjustmentException exception = assertThrows(
+                DiversificationAdjustmentException.class,
                 () -> simulator.redistributeAmounts(empty, "USD", 0.10));
+        assertEquals(DiversificationAdjustmentException.Reason.EMPTY_PORTFOLIO, exception.reason());
     }
 
     @Test
-    @DisplayName("재배분: 포트폴리오에 없는 통화면 예외")
+    @DisplayName("재배분: 포트폴리오에 없는 통화면 예외 — 원인은 UNKNOWN_CURRENCY 다(이슈 #89)")
     void 없는_통화면_예외() {
-        assertThrows(IllegalArgumentException.class,
+        DiversificationAdjustmentException exception = assertThrows(
+                DiversificationAdjustmentException.class,
                 () -> simulator.redistributeAmounts(fixtureExposure(), "GBP", 0.10));
+        assertEquals(DiversificationAdjustmentException.Reason.UNKNOWN_CURRENCY, exception.reason());
     }
 
     @Test
-    @DisplayName("재배분: 조정 후 비중이 0~1 을 벗어나면 예외")
+    @DisplayName("재배분: 조정 후 비중이 0~1 을 벗어나면 예외 — 원인은 SHARE_OUT_OF_RANGE 다(이슈 #89)")
     void 조정_후_비중_범위_예외() {
-        assertThrows(IllegalArgumentException.class,
+        DiversificationAdjustmentException tooHigh = assertThrows(
+                DiversificationAdjustmentException.class,
                 () -> simulator.redistributeAmounts(fixtureExposure(), "JPY", 0.90));
-        assertThrows(IllegalArgumentException.class,
+        assertEquals(DiversificationAdjustmentException.Reason.SHARE_OUT_OF_RANGE, tooHigh.reason());
+
+        DiversificationAdjustmentException tooLow = assertThrows(
+                DiversificationAdjustmentException.class,
                 () -> simulator.redistributeAmounts(fixtureExposure(), "JPY", -0.90));
+        assertEquals(DiversificationAdjustmentException.Reason.SHARE_OUT_OF_RANGE, tooLow.reason());
     }
 
     @Test

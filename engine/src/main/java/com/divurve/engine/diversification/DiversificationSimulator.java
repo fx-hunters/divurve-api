@@ -27,7 +27,8 @@ public class DiversificationSimulator {
      * @param targetCurrency         조정 대상 통화
      * @param deltaShare             비중 변화량 (양수: 증가, 음수: 감소)
      * @return 시뮬레이션 결과
-     * @throws IllegalArgumentException 입력값이 부적절한 경우
+     * @throws DiversificationAdjustmentException 대상 통화가 없거나 조정 후 비중이 0~1 범위를
+     *                                             벗어나는 경우 (이슈 #89, {@code reason()} 참고)
      */
     public SimulationResult simulate(
             Map<String, Double> currencyToShare,
@@ -121,8 +122,9 @@ public class DiversificationSimulator {
      * @param targetCurrency     가정을 적용할 통화
      * @param deltaShare         비중 변화량 (양수 증가, 음수 감소)
      * @return 재배분된 통화별 원화 금액. 합계는 입력 합계와 정확히 같다
-     * @throws IllegalArgumentException 외화자산이 0이거나, 대상 통화가 없거나,
-     *                                  조정 후 비중이 0~1 범위를 벗어나는 경우
+     * @throws DiversificationAdjustmentException 외화자산이 0이거나, 대상 통화가 없거나,
+     *                                  조정 후 비중이 0~1 범위를 벗어나는 경우 — {@code reason()} 으로
+     *                                  구분한다(이슈 #89)
      */
     public Map<String, Long> redistributeAmounts(
             Map<String, Long> currencyToAssetKrw,
@@ -133,7 +135,9 @@ public class DiversificationSimulator {
 
         long total = currencyToAssetKrw.values().stream().mapToLong(Long::longValue).sum();
         if (total <= 0L) {
-            throw new IllegalArgumentException("외화자산이 없어 비중 가정을 적용할 수 없습니다.");
+            throw new DiversificationAdjustmentException(
+                    "외화자산이 없어 비중 가정을 적용할 수 없습니다.",
+                    DiversificationAdjustmentException.Reason.EMPTY_PORTFOLIO);
         }
 
         Map<String, Double> shares = new LinkedHashMap<>();
@@ -170,8 +174,9 @@ public class DiversificationSimulator {
             String targetCurrency,
             double deltaShare) {
         if (!currencyToShare.containsKey(targetCurrency)) {
-            throw new IllegalArgumentException(
-                    "조정 대상 통화 " + targetCurrency + "가 포트폴리오에 없습니다.");
+            throw new DiversificationAdjustmentException(
+                    "조정 대상 통화 " + targetCurrency + "가 포트폴리오에 없습니다.",
+                    DiversificationAdjustmentException.Reason.UNKNOWN_CURRENCY);
         }
 
         Map<String, Double> adjusted = new LinkedHashMap<>(currencyToShare);
@@ -179,9 +184,10 @@ public class DiversificationSimulator {
         double newTargetShare = currentTargetShare + deltaShare;
 
         if (newTargetShare < 0 || newTargetShare > 1) {
-            throw new IllegalArgumentException(
+            throw new DiversificationAdjustmentException(
                     "조정 후 비중이 범위를 벗어났습니다 (조정 대상: " + targetCurrency +
-                            ", 현재: " + currentTargetShare + ", 조정량: " + deltaShare + ").");
+                            ", 현재: " + currentTargetShare + ", 조정량: " + deltaShare + ").",
+                    DiversificationAdjustmentException.Reason.SHARE_OUT_OF_RANGE);
         }
 
         // 조정 대상 통화의 비중 변경

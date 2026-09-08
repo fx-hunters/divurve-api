@@ -7,6 +7,10 @@ import static org.mockito.Mockito.when;
 import com.divurve.api.dto.xray.AttributionResponse;
 import com.divurve.api.dto.xray.XrayResponse;
 import com.divurve.common.response.ApiResponse;
+import com.divurve.domain.market.MarketRegimeService;
+import com.divurve.domain.market.MarketRegimeService.AnomalyView;
+import com.divurve.domain.market.MarketRegimeService.GuidanceView;
+import com.divurve.domain.market.MarketRegimeService.MarketRegimeView;
 import com.divurve.domain.xray.XrayService;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -28,10 +32,20 @@ class XrayControllerTest {
     @Mock
     private XrayService xrayService;
 
+    @Mock
+    private MarketRegimeService marketRegimeService;
+
     private final UUID userId = UUID.randomUUID();
 
     private XrayController controller() {
-        return new XrayController(xrayService);
+        return new XrayController(xrayService, marketRegimeService);
+    }
+
+    private static MarketRegimeView regimeView(String regime) {
+        return new MarketRegimeView(
+                "caution", "변동성 확대", regime, Map.of(), List.of(),
+                new GuidanceView(true, true, true),
+                new AnomalyView(false, MarketRegimeService.ANOMALY_NOTE));
     }
 
     @Test
@@ -54,10 +68,13 @@ class XrayControllerTest {
                 new XrayService.SensitivityView(247_200L, sensitivity),
                 null,
                 true));
+        when(marketRegimeService.getRegime()).thenReturn(regimeView("elevated"));
 
         ApiResponse<XrayResponse> response = controller().getXray(userId);
 
         assertThat(response.meta()).isNotNull();
+        // 명세 §5.3 예시 — 시장 수치를 포함하는 /xray 응답은 meta.regime 을 동반한다(§1.2).
+        assertThat(response.meta().regime()).isEqualTo("elevated");
         XrayResponse data = response.data();
         // 체험용 데이터 배지의 근거 — meta.is_demo 로는 가입 계정의 샘플을 판정할 수 없다(이슈 #112).
         assertThat(data.isSampleData()).isTrue();
@@ -85,6 +102,7 @@ class XrayControllerTest {
                 new XrayService.SensitivityView(0L, Map.of()),
                 null,
                 false));
+        when(marketRegimeService.getRegime()).thenReturn(regimeView("calm"));
 
         XrayResponse data = controller().getXray(userId).data();
 
@@ -94,6 +112,26 @@ class XrayControllerTest {
         assertThat(data.concentration().threshold()).isNull();
         assertThat(data.concentration().thresholdSource()).isNull();
         assertThat(data.concentration().status()).isEqualTo("unknown");
+    }
+
+    @Test
+    @DisplayName("시장 국면 조회가 실패해도 자산 분해 본체는 살아남고 meta.regime 만 생략된다")
+    void 국면_조회_실패시_regime_만_생략된다() {
+        Map<String, Long> assets = Map.of("USD", 15_790_000L);
+        when(xrayService.getPortfolio(userId)).thenReturn(new XrayService.PortfolioSnapshot(
+                68_400_000L, 43_680_000L, 24_720_000L, 0.3614, assets, Map.of("USD", 0.6388),
+                new XrayService.ConcentrationView(
+                        "USD", 0.6388, 0.60, "risk_profile.balanced", "above_threshold", 0.0388),
+                new XrayService.SensitivityView(157_900L, Map.of("USD", 157_900L)),
+                null,
+                true));
+        when(marketRegimeService.getRegime()).thenThrow(new RuntimeException("ECOS 히스토리 조회 실패"));
+
+        ApiResponse<XrayResponse> response = controller().getXray(userId);
+
+        assertThat(response.meta().regime()).isNull();
+        assertThat(response.data().totalAssetKrw()).isEqualTo(68_400_000L);
+        assertThat(response.data().exposure()).hasSize(1);
     }
 
     @Test
@@ -114,6 +152,8 @@ class XrayControllerTest {
         AttributionResponse data = response.data();
 
         assertThat(response.meta()).isNotNull();
+        // 명세 §5.4 예시는 meta 에 regime 을 싣지 않는다 — §5.3(현재 노출)과 달리 붙이지 않는다.
+        assertThat(response.meta().regime()).isNull();
         assertThat(data.currencyCode()).isEqualTo("USD");
         assertThat(data.costBasisKrw()).isEqualTo(15_050_000L);
         assertThat(data.currentKrw()).isEqualTo(15_790_000L);
