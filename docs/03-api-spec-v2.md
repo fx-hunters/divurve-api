@@ -507,9 +507,8 @@ NFR-DT-02 "동일 수치는 한 Mock fixture에서 공급한다"를 지키기 �
 {
   "data": {
     "pair_code": "USDKRW", "horizon_days": 30,
-    "model":       { "hit_rate": 0.540, "mae": 0.0190,
-                     "coverage_80": 0.810, "avg_width": 0.0580 },
-    "random_walk": { "hit_rate": 0.500, "mae": 0.0194 },
+    "model":       { "mae": 0.0190, "coverage_80": 0.810, "avg_width": 0.0580 },
+    "random_walk": { "mae": 0.0194 },
     "rw_improvement": 0.0206,
     "validation": { "method": "rolling_walk_forward", "folds": 24, "leakage_guard": true },
     "note": "구간 포함률은 구간을 넓히면 쉽게 오르므로 평균 구간 폭과 함께 봐야 합니다.",
@@ -518,7 +517,14 @@ NFR-DT-02 "동일 수치는 한 Mock fixture에서 공급한다"를 지키기 �
 }
 ```
 
-`coverage_80`은 반드시 `avg_width`와 함께 노출한다. `rw_improvement`가 음수여도, `hit_rate`가 50%에 가까워도 그대로 보여준다(ERD §8, FR-FC-11).
+`coverage_80`은 반드시 `avg_width`와 함께 노출한다. `rw_improvement`가 음수여도, `coverage_80`이 목표치(0.8)에 못 미쳐도 그대로 보여준다(ERD §8, FR-FC-11).
+
+> **`hit_rate`(방향 적중률)를 두지 않는다 (이슈 #90).** 이 서비스의 기준 모델은 드리프트 0이라 점예측이
+> 항상 기준값과 같다. 방향 적중률은 예측·실제 방향을 비교해 내는 지표인데, 점예측이 방향을 아예 제시하지
+> 않으니 모든 통화쌍·모든 horizon에서 예외 없이 0이 나온다 — 계산을 고쳐서 해결할 수 있는 버그가 아니라
+> "방향을 제시하지 않는 모델에는 방향 적중률이라는 지표 자체가 성립하지 않는다"는 구조적 사실이다.
+> 값을 지어낼 수 없어 지표를 없앴다. 대체 지표는 만들지 않는다 — `coverage_80`이 이미 이 모델의
+> 성적을 정직하게 답하고 있다.
 
 ### 5.9 POST `/stress/runs`
 

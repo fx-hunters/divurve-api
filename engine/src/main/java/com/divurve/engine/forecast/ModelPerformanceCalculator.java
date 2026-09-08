@@ -7,63 +7,28 @@ import java.util.Objects;
 /**
  * 모델 성적 지표 계산 (FR-FC-11, API 명세 v2 §5.8).
  *
- * <p>모델 투명성: 방향 적중률, 상대 MAE, 구간 포함률, 평균 구간 폭, 랜덤워크 대비 개선율.
+ * <p>모델 투명성: 상대 MAE, 구간 포함률, 평균 구간 폭, 랜덤워크 대비 개선율.
  * 모든 지표는 롤링 워크포워드 검증 결과이며, 각 시점의 기준값({@code baseRates})은
  * <b>그 시점까지의 실측값</b>이라 미래 누출이 없다.
  *
  * <h2>변경 이력 (calc)</h2>
  * <ol>
- *   <li><b>방향 적중률의 i=0 편향 제거.</b> 이전 구현은 첫 시점의 기준값을
- *       {@code forecasts.get(0)} 으로 잡아 {@code pred > prevRate} 도 {@code pred < prevRate} 도
- *       성립하지 않았고, 첫 시점이 <b>항상 미적중</b>이라 적중률이 {@code 1/n} 만큼 낮게 나왔다
- *       (예: 완벽 예측 10건이 1.0 이 아니라 0.9). 이제 기준값을 인자로 받는다.</li>
  *   <li><b>MAE·구간 폭을 비율로.</b> 명세 §5.8 예시({@code mae 0.0190}, {@code avg_width 0.0580})는
  *       환율 절대값이 아니라 기준값 대비 비율이다. 절대 MAE 는 통화쌍마다 자릿수가 달라 비교가 안 된다.</li>
  *   <li><b>랜덤워크 벤치마크 정의 수정.</b> 이전 구현은 {@code initialRate} 상수를 전 구간 예측으로 써서
  *       "직전 실측값"이라는 랜덤워크 정의와 달랐다. 이제 시점별 기준값을 그대로 예측으로 쓴다.</li>
+ *   <li><b>방향 적중률({@code hit_rate}) 제거 (이슈 #90).</b> 이 서비스의 기준 모델은 드리프트 0 이라
+ *       점예측이 항상 기준값과 같다({@code forecastRates == baseRates}). {@code Double.compare} 로
+ *       구한 방향이 실측 방향(+1/-1)과 영원히 일치할 수 없어 방향 적중률은 모든 통화쌍·모든 horizon 에서
+ *       예외 없이 0 이었다 — 계산 버그가 아니라 "방향을 제시하지 않는 모델에는 방향 적중률이라는
+ *       지표 자체가 성립하지 않는" 구조적 결과다. 값을 고쳐 노출할 방법이 없어 지표를 아예 없앴다.
+ *       {@code calculateHitRate} 를 이 시점에 함께 제거했다 — 대체 지표는 만들지 않는다.
+ *       {@code coverage_80} 이 이미 "이 모델이 얼마나 맞았나"를 정직하게 답한다.</li>
  * </ol>
  */
 public class ModelPerformanceCalculator {
 
     private ModelPerformanceCalculator() {
-    }
-
-    /**
-     * 방향 적중률 — 기준 시점 대비 방향(상승·하락·보합)이 실제와 일치한 비율.
-     *
-     * <p>기준값과의 비교이므로 {@code i} 에 따라 규칙이 달라지지 않는다. 보합(예측값 = 기준값)은
-     * 실제도 보합일 때만 적중이다 — <b>방향을 제시하지 않는 모델은 방향 적중률이 0 에 수렴한다.</b>
-     * 이 서비스의 기준 모델은 드리프트 0 이라 의도적으로 방향을 제시하지 않으며
-     * (명세 §5.7 "방향 확률 필드를 두지 않는다"), 그 사실이 이 지표에 그대로 드러난다.
-     *
-     * @param baseRates     각 시점의 기준값 (예측을 낸 시점의 실측 환율)
-     * @param forecastRates 모델이 낸 지평 끝 값
-     * @param actualRates   실제 지평 끝 값
-     * @return 적중률 (0~1). 입력이 비어 있으면 0
-     * @throws IllegalArgumentException 세 목록의 크기가 다른 경우
-     */
-    public static double calculateHitRate(
-            List<Double> baseRates, List<Double> forecastRates, List<Double> actualRates) {
-        Objects.requireNonNull(baseRates, "baseRates must not be null");
-        Objects.requireNonNull(forecastRates, "forecastRates must not be null");
-        Objects.requireNonNull(actualRates, "actualRates must not be null");
-        requireSameSize(baseRates.size(), forecastRates.size());
-        requireSameSize(forecastRates.size(), actualRates.size());
-        if (forecastRates.isEmpty()) {
-            return 0.0;
-        }
-
-        int hits = 0;
-        for (int i = 0; i < forecastRates.size(); i++) {
-            double base = baseRates.get(i);
-            int forecastDirection = Double.compare(forecastRates.get(i), base);
-            int actualDirection = Double.compare(actualRates.get(i), base);
-            if (forecastDirection == actualDirection) {
-                hits++;
-            }
-        }
-
-        return (double) hits / forecastRates.size();
     }
 
     /**
@@ -168,7 +133,7 @@ public class ModelPerformanceCalculator {
      *
      * @param baseRates   각 시점의 기준값
      * @param actualRates 실제 지평 끝 값들
-     * @return 랜덤워크의 방향 적중률과 상대 MAE
+     * @return 랜덤워크의 상대 MAE
      * @throws IllegalArgumentException 크기가 다르거나 실제 값에 0 이 있는 경우
      */
     public static RandomWalkMetrics calculateRandomWalkBenchmark(
@@ -177,10 +142,9 @@ public class ModelPerformanceCalculator {
         Objects.requireNonNull(actualRates, "actualRates must not be null");
 
         List<Double> randomWalkRates = new ArrayList<>(baseRates);
-        double hitRate = calculateHitRate(baseRates, randomWalkRates, actualRates);
         double mae = calculateMaeRatio(randomWalkRates, actualRates);
 
-        return new RandomWalkMetrics(hitRate, mae);
+        return new RandomWalkMetrics(mae);
     }
 
     /**
@@ -208,9 +172,8 @@ public class ModelPerformanceCalculator {
     /**
      * 랜덤워크 벤치마크 메트릭.
      *
-     * @param hitRate 방향 적중률
-     * @param mae     상대 MAE
+     * @param mae 상대 MAE
      */
-    public record RandomWalkMetrics(double hitRate, double mae) {
+    public record RandomWalkMetrics(double mae) {
     }
 }

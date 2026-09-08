@@ -1,5 +1,6 @@
 package com.divurve.api.controller;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -12,6 +13,10 @@ import com.divurve.api.dto.forecast.ForecastResponse;
 import com.divurve.api.dto.forecast.ModelPerformanceResponse;
 import com.divurve.common.response.ApiResponse;
 import com.divurve.domain.forecast.ForecastService;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.PropertyNamingStrategies;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
@@ -79,6 +84,33 @@ class ForecastControllerTest {
         assertEquals(Instant.parse("2026-08-31T00:00:00Z"), response.data().evaluatedAt());
     }
 
+    /**
+     * 응답 키에서 {@code hit_rate} 가 완전히 사라졌는지 직렬화 수준에서 확인한다 (이슈 #90).
+     *
+     * <p>운영과 같은 SNAKE_CASE 전략으로 실제 JSON 을 만들어 필드명을 못 박는다
+     * ({@code NotificationControllerTest} 의 선례를 따른다) — DTO 레코드에서 필드를 지워도
+     * 직렬화 결과에 우연히 남는 경로(예: 커스텀 getter)가 없다는 것까지 확인한다.
+     */
+    @Test
+    @DisplayName("성적표 응답 JSON 에는 hit_rate 키가 없다")
+    void modelPerformanceResponseHasNoHitRateKey() {
+        when(service.getModelPerformance("USDKRW", 90)).thenReturn(performanceView());
+        ObjectMapper objectMapper = new ObjectMapper()
+                .registerModule(new JavaTimeModule())
+                .setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE);
+
+        ApiResponse<ModelPerformanceResponse> response =
+                controller.getModelPerformance("USDKRW", 90);
+        JsonNode json = objectMapper.valueToTree(response.data());
+
+        JsonNode model = json.get("model");
+        JsonNode randomWalk = json.get("random_walk");
+        assertThat(model.fieldNames()).toIterable()
+                .containsExactlyInAnyOrder("mae", "coverage_80", "avg_width");
+        assertThat(randomWalk.fieldNames()).toIterable().containsExactlyInAnyOrder("mae");
+        assertThat(json.toString()).doesNotContain("hit_rate");
+    }
+
     @Test
     @DisplayName("전망 동인은 그대로 옮긴다 (L2)")
     void factors() {
@@ -126,8 +158,8 @@ class ForecastControllerTest {
         return new ForecastService.ModelPerformanceView(
                 "USDKRW",
                 90,
-                new ForecastService.ModelMetricsView(0.54, 0.019, 0.81, 0.058),
-                new ForecastService.RandomWalkMetricsView(0.54, 0.019),
+                new ForecastService.ModelMetricsView(0.019, 0.81, 0.058),
+                new ForecastService.RandomWalkMetricsView(0.019),
                 0.0,
                 new ForecastService.ValidationView("rolling_walk_forward", 24, true),
                 ForecastService.PERFORMANCE_NOTE,

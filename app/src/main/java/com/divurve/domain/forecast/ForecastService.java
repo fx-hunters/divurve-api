@@ -201,7 +201,9 @@ public class ForecastService {
      * 실측값이라 미래 누출이 없다({@code leakage_guard}). 하드코딩된 목값을 쓰지 않는다.
      *
      * <p>이 서비스의 기준 모델은 드리프트 0 이라 점예측이 랜덤워크와 <b>같다</b>. 그래서
-     * {@code rw_improvement} 는 0 이고 방향 적중률도 낮게 나온다 — 숨기지 않고 그대로 보여준다(명세 §5.8).
+     * {@code rw_improvement} 는 0 이다 — 숨기지 않고 그대로 보여준다(명세 §5.8). 응답에는
+     * 방향 적중률({@code hit_rate})을 두지 않는다 — 드리프트 0 모델은 방향을 제시하지 않아
+     * 이 지표가 항상 0 으로 나와 성립하지 않는다(이슈 #90). {@code coverage_80} 이 대신 성적을 답한다.
      *
      * @param rawPairCode {@code pair_code}
      * @param horizonDays 지평 (7·14·30·60·90·180 중 하나)
@@ -251,7 +253,6 @@ public class ForecastService {
                     "성적표를 계산할 과거 관측이 부족합니다 (필요 지평 %d일).".formatted(horizonDays), "horizon_days");
         }
 
-        double modelHitRate = ModelPerformanceCalculator.calculateHitRate(baseRates, forecastRates, actualRates);
         double modelMae = ModelPerformanceCalculator.calculateMaeRatio(forecastRates, actualRates);
         double coverage80 = ModelPerformanceCalculator.calculateCoverage80(lowerBounds, upperBounds, actualRates);
         double avgWidth = ModelPerformanceCalculator.calculateAvgWidthRatio(lowerBounds, upperBounds, baseRates);
@@ -264,8 +265,8 @@ public class ForecastService {
         return new ModelPerformanceView(
                 pair.canonical(),
                 horizonDays,
-                new ModelMetricsView(modelHitRate, modelMae, coverage80, avgWidth),
-                new RandomWalkMetricsView(randomWalk.hitRate(), randomWalk.mae()),
+                new ModelMetricsView(modelMae, coverage80, avgWidth),
+                new RandomWalkMetricsView(randomWalk.mae()),
                 improvement,
                 new ValidationView(VALIDATION_METHOD, baseRates.size(), true),
                 PERFORMANCE_NOTE,
@@ -513,11 +514,11 @@ public class ForecastService {
     }
 
     /** 모델 지표. {@code coverage80} 은 반드시 {@code avgWidth} 와 함께 노출한다. */
-    public record ModelMetricsView(double hitRate, double mae, double coverage80, double avgWidth) {
+    public record ModelMetricsView(double mae, double coverage80, double avgWidth) {
     }
 
     /** 랜덤워크 벤치마크 지표. */
-    public record RandomWalkMetricsView(double hitRate, double mae) {
+    public record RandomWalkMetricsView(double mae) {
     }
 
     /** 검증 방법. */
