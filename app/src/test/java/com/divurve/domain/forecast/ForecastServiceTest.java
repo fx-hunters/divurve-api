@@ -211,9 +211,56 @@ class ForecastServiceTest {
     }
 
     @Test
-    @DisplayName("지평은 30 또는 90 만 허용한다")
+    @DisplayName("허용 목록(7·14·30·60·90·180) 밖의 지평은 거부한다")
     void invalidHorizon() {
-        assertThrows(InvalidRequestException.class, () -> service.getForecast(USER_ID, "USDKRW", 45));
+        InvalidRequestException exception = assertThrows(
+                InvalidRequestException.class, () -> service.getForecast(USER_ID, "USDKRW", 45));
+
+        assertTrue(exception.getMessage().contains("7·14·30·60·90·180"));
+    }
+
+    @Test
+    @DisplayName("이슈 #121 — 세분화된 지평(7·14·60·180)도 band 길이가 지평과 같다")
+    void widenedHorizonRangeProducesMatchingBandLength() {
+        givenHistory(history(LONG_HISTORY, 0.01, 0.01));
+        givenLatestRate();
+        givenNoAssets();
+
+        for (int horizonDays : List.of(7, 14, 60, 180)) {
+            ForecastService.ForecastView view = service.getForecast(USER_ID, "USDKRW", horizonDays);
+
+            assertEquals(horizonDays, view.band().size());
+            assertEquals(TODAY.plusDays(horizonDays), view.band().get(view.band().size() - 1).date());
+        }
+    }
+
+    @Test
+    @DisplayName("이슈 #121 — 지평을 넓혀도 기존 30·90 일 구간 산출값은 그대로다"
+            + " (같은 입력에 대한 engine 직접 계산과 일치)")
+    void existingThirtyAndNinetyDayIntervalsAreUnchanged() {
+        List<FxRateHistoryProvider.HistoryRateSnapshot> fixedHistory = history(LONG_HISTORY, 0.01, 0.01);
+        givenHistory(fixedHistory);
+        givenLatestRate();
+        givenNoAssets();
+
+        // ForecastService 내부와 같은 방식(realized30d)으로 독립 계산한 "정답"과 비교한다 —
+        // 허용 지평을 넓히기 전/후 모두 이 값과 같아야 30·90 산출이 그대로라는 근거가 된다.
+        List<Double> dailyReturns = new java.util.ArrayList<>();
+        for (int i = 1; i < fixedHistory.size(); i++) {
+            dailyReturns.add(Math.log(fixedHistory.get(i).rate() / fixedHistory.get(i - 1).rate()));
+        }
+        double expectedVol30d = com.divurve.engine.forecast.VolatilityCalculator.calculateRealized30d(dailyReturns);
+
+        for (int horizonDays : List.of(30, 90)) {
+            com.divurve.engine.forecast.FanChartCalculator.PathPoint expected =
+                    com.divurve.engine.forecast.FanChartCalculator.analyticInterval(
+                            BASE_RATE, expectedVol30d, horizonDays);
+
+            ForecastService.ForecastView view = service.getForecast(USER_ID, "USDKRW", horizonDays);
+
+            assertEquals(expected.p80Lo(), view.interval80().lo(), 1e-9);
+            assertEquals(expected.p80Hi(), view.interval80().hi(), 1e-9);
+        }
     }
 
     @Test
@@ -277,7 +324,40 @@ class ForecastServiceTest {
     @Test
     @DisplayName("성적표도 지평 검증을 거친다")
     void modelPerformanceInvalidHorizon() {
-        assertThrows(InvalidRequestException.class, () -> service.getModelPerformance("USDKRW", 7));
+        assertThrows(InvalidRequestException.class, () -> service.getModelPerformance("USDKRW", 45));
+    }
+
+    @Test
+    @DisplayName("이슈 #121 — GET /forecast 와 성적표 양쪽에 같은 확장 지평 집합(7·14·30·60·90·180)이 적용된다")
+    void bothEndpointsShareTheSameWidenedHorizonSet() {
+        for (int horizonDays : List.of(7, 14, 30, 60, 90, 180)) {
+            givenHistory(history(LONG_HISTORY, 0.01, 0.01));
+            givenLatestRate();
+            givenNoAssets();
+
+            assertEquals(horizonDays, service.getForecast(USER_ID, "USDKRW", horizonDays).horizonDays());
+            assertEquals(horizonDays, service.getModelPerformance("USDKRW", horizonDays).horizonDays());
+        }
+    }
+
+    @Test
+    @DisplayName("이슈 #121 — 5년치 실사 관측(약 1,400개) 규모에서는 180일 지평도 폴드 부족 없이 24개를 채운다")
+    void longestHorizonStillFillsAllFoldsWithProductionScaleHistory() {
+        givenHistory(history(LONG_HISTORY, 0.01, 0.01));
+
+        ForecastService.ModelPerformanceView view = service.getModelPerformance("USDKRW", 180);
+
+        assertEquals(24, view.validation().folds());
+    }
+
+    @Test
+    @DisplayName("이슈 #121 — 관측이 지평 + 514 에 못 미치면 180일 지평도 관측 부족 400 을 그대로 낸다"
+            + " (응답 계약은 바꾸지 않는다)")
+    void longestHorizonStillFailsFastWhenHistoryIsTooShortForEvenOneFold() {
+        // fold=0 에 필요한 최소치: size >= horizonDays + 31. 180 + 31 = 211 에서 하나 모자라게 만든다.
+        givenHistory(history(210, 0.01, 0.01));
+
+        assertThrows(InvalidRequestException.class, () -> service.getModelPerformance("USDKRW", 180));
     }
 
     // ── 그 외 ────────────────────────────────────────────────────
