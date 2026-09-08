@@ -23,7 +23,7 @@ import org.mockito.ArgumentCaptor;
 /**
  * {@link AnthropicMessageClient} 테스트 (이슈 #73).
  *
- * <p>SDK 를 호출하는 유일한 지점이다 — 모델·maxTokens·system·user 가 실제로 요청에 실리는지,
+ * <p>SDK 를 호출하는 유일한 지점이다 — 모델·maxTokens·effort·system·user 가 실제로 요청에 실리는지,
  * 텍스트 블록만 골라 이어붙이는지를 본다. 네트워크는 타지 않는다({@link AnthropicClient} 는 인터페이스).
  */
 class AnthropicMessageClientTest {
@@ -31,7 +31,7 @@ class AnthropicMessageClientTest {
     private final AnthropicClient client = mock(AnthropicClient.class);
     private final MessageService messageService = mock(MessageService.class);
     private final AnthropicProperties props =
-            new AnthropicProperties(true, false, "sk-ant-test", "claude-opus-5", 777, null);
+            new AnthropicProperties(true, false, "sk-ant-test", "claude-opus-5", 777, "medium", null);
 
     private final AnthropicMessageClient sut = new AnthropicMessageClient(client, props);
 
@@ -83,6 +83,11 @@ class AnthropicMessageClientTest {
 
         assertThat(params.model().asString()).contains("claude-opus-5");
         assertThat(params.maxTokens()).isEqualTo(777);
+        // 이슈 #158 — 설정값이 실제로 요청에 실리는지가 핵심이다. 보내지 않으면 서버 기본값
+        // high 가 적용되고, 그게 forecast_summary 전건 폴백의 원인이었다. props 에 low 가 아닌
+        // medium 을 넣어 둔 것은 상수를 박아 넣은 구현이 이 단언을 통과하지 못하게 하기 위해서다.
+        assertThat(params.outputConfig().orElseThrow().effort().orElseThrow().asString())
+                .isEqualTo("medium");
         assertThat(params.system()).isPresent();
         assertThat(completion.text()).isEqualTo("{\"sentences\": []}");
         assertThat(completion.usage().inputTokens()).isEqualTo(120);

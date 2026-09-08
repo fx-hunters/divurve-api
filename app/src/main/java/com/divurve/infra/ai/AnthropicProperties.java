@@ -1,14 +1,27 @@
 package com.divurve.infra.ai;
 
 import java.time.Duration;
+import java.util.Locale;
+import java.util.Set;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
  * Anthropic Claude API 접속 설정 (이슈 #73, 이슈 #123).
  *
- * <p>기본값은 이슈 #73 "확정 사항" 표를 그대로 옮긴 것이다. 특히 <b>타임아웃 5초</b>는 AI 서술이
- * 동기 HTTP 요청 안에서 일어나기 때문이다 — SDK 기본값(10분)을 그대로 두면 Anthropic 지연이 그대로
- * 우리 응답 지연이 되어 NFR-AI-03(AI 실패가 서비스 실패가 되지 않는다)을 지킬 수 없다.
+ * <p>기본값은 이슈 #73 "확정 사항" 표를 그대로 옮긴 것이다. 타임아웃을 SDK 기본값(10분)에 맡기지
+ * 않는 이유는 AI 서술이 동기 HTTP 요청 안에서 일어나기 때문이다 — Anthropic 지연이 그대로 우리 응답
+ * 지연이 되어 NFR-AI-03(AI 실패가 서비스 실패가 되지 않는다)을 지킬 수 없다.
+ *
+ * <p><b>{@code effort} 는 이 설정의 나머지와 성격이 다르다</b>(이슈 #158). 다른 값들은 "얼마나
+ * 기다릴까"를 정하지만 이것은 <b>얼마나 걸리게 만들까</b>를 정한다. {@code claude-opus-5} 는
+ * {@code thinking} 을 생략하면 adaptive thinking 이 켜지고 effort 는 {@code high} 가 되는데
+ * (Opus 4.8/4.7 과 반대 동작), 확정된 {@code facts} 를 4문장으로 옮기는 일에는 추론이 필요 없다.
+ * 그런데 이 값을 <b>요청에 싣지 않아</b> 서버 기본값 {@code high} 로 매 호출이 돌았고, 실측 14.8초로
+ * 당시 타임아웃 5초를 항상 넘겨 {@code forecast_summary} 전건이 폴백했다.
+ *
+ * <p><b>thinking 을 끄지는 않는다.</b> Opus 5 에서 {@code thinking} 을 끄면 {@code <thinking>} 태그가
+ * 본문에 섞여 나오는 실패 모드가 있고, 그건 곧 {@link ClaudeExplainPrompt} 의 JSON 파싱 실패다 —
+ * 지연을 줄이려다 폴백 사유만 바꾸는 셈이 된다. effort 를 낮추면 같은 효과를 안전하게 얻는다.
  *
  * <p><b>기본값은 코드에, 실제 값은 환경변수에</b>(이슈 #123). {@code model}·{@code max-tokens}·
  * {@code request-timeout} 은 운영에서 손봐야 하는 값인데 {@code application.yml} 에 상수로 박혀 있었다 —
@@ -28,6 +41,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * @param apiKey         발급 API 키 (환경변수 {@code ANTHROPIC_API_KEY} 로 주입)
  * @param model          모델 ID. 기본 {@value #DEFAULT_MODEL}
  * @param maxTokens      응답 상한 토큰. 서술은 4문장이므로 크게 잡을 이유가 없다
+ * @param effort         추론 강도. 기본 {@value #DEFAULT_EFFORT}, 허용값은 {@link #ALLOWED_EFFORTS}
  * @param requestTimeout 요청 1건당 타임아웃
  */
 @ConfigurationProperties(prefix = "app.external.anthropic")
@@ -37,14 +51,31 @@ public record AnthropicProperties(
     String apiKey,
     String model,
     int maxTokens,
+    String effort,
     Duration requestTimeout
 ) {
 
     /** 이슈 #73 확정 — 두 용도 모두 상위 모델을 쓴다. */
     public static final String DEFAULT_MODEL = "claude-opus-5";
 
+    /**
+     * 이슈 #158 — 서술은 확정된 {@code facts} 를 문장으로 옮기는 일이라 추론 깊이가 결과를 바꾸지
+     * 않는다. 지연·토큰·비용만 늘 뿐이므로 가장 낮은 단계에서 시작한다.
+     */
+    public static final String DEFAULT_EFFORT = "low";
+
+    /** API 가 받는 effort 단계. 오타를 <b>기동 시점에</b> 잡기 위해 여기서 목록으로 고정한다. */
+    static final Set<String> ALLOWED_EFFORTS = Set.of("low", "medium", "high", "xhigh", "max");
+
     static final int DEFAULT_MAX_TOKENS = 1024;
-    static final Duration DEFAULT_REQUEST_TIMEOUT = Duration.ofSeconds(5);
+
+    /**
+     * 이슈 #158 — 예전 값은 5초였고, effort 를 싣지 않아 매 호출이 {@code high} 로 돌던 시절에는
+     * 실측 14.8초라 전건이 타임아웃이었다. effort 를 낮춘 뒤에도 콜드 스타트와 지연 스파이크는
+     * 남으므로 여유를 둔다. 최악 소요시간은 이 값 하나가 아니라 총예산과 함께 정해진다 —
+     * {@code AiService} 의 {@code total-budget} 설명을 함께 본다.
+     */
+    static final Duration DEFAULT_REQUEST_TIMEOUT = Duration.ofSeconds(12);
 
     public AnthropicProperties {
         if (model == null || model.isBlank()) {
@@ -53,10 +84,35 @@ public record AnthropicProperties(
         if (maxTokens <= 0) {
             maxTokens = DEFAULT_MAX_TOKENS;
         }
+        effort = normalizeEffort(effort);
         if (requestTimeout == null) {
             requestTimeout = DEFAULT_REQUEST_TIMEOUT;
         }
         requireExtractPrerequisite(enabled, extractEnabled);
+    }
+
+    /**
+     * effort 값을 정규화하고 검증한다 (이슈 #158).
+     *
+     * <p><b>모르는 값을 그대로 흘려보내지 않는다.</b> API 는 잘못된 effort 에 400 을 주고, 그건
+     * {@code AiService} 에서 {@code PROVIDER_ERROR} 로 잡혀 조용히 폴백한다 — 오타 하나가 "AI 가
+     * 가끔 템플릿 문장을 낸다"로만 보이는, 이 이슈에서 겪은 것과 똑같은 형태의 실패다. 기동 때
+     * 이유를 말하고 죽는 편이 낫다({@link #requireApiKey()} 와 같은 판단).
+     *
+     * @param effort 주입된 값. {@code null} 이거나 비어 있으면 {@value #DEFAULT_EFFORT}
+     * @return 소문자로 정규화된 허용 effort
+     */
+    private static String normalizeEffort(String effort) {
+        if (effort == null || effort.isBlank()) {
+            return DEFAULT_EFFORT;
+        }
+        String normalized = effort.strip().toLowerCase(Locale.ROOT);
+        if (!ALLOWED_EFFORTS.contains(normalized)) {
+            throw new IllegalStateException(
+                ("app.external.anthropic.effort=%s 는 허용되지 않는다 — %s 중 하나여야 한다 "
+                    + "(ANTHROPIC_EFFORT 환경변수를 확인한다)").formatted(effort, ALLOWED_EFFORTS));
+        }
+        return normalized;
     }
 
     /**
