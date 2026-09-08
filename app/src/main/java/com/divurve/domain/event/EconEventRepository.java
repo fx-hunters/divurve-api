@@ -3,6 +3,7 @@ package com.divurve.domain.event;
 import com.divurve.domain.event.entity.EconEvent;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 
@@ -26,4 +27,13 @@ public interface EconEventRepository extends JpaRepository<EconEvent, UUID> {
      * @return 일정 목록 (날짜 오름차순). {@code idx_events_date} 를 탄다
      */
     List<EconEvent> findByEventDateBetweenOrderByEventDateAsc(LocalDate from, LocalDate to);
+
+    /**
+     * 유니크 키로 한 건을 읽는다 (이슈 #163).
+     *
+     * <p>{@code existsBy...} 는 "있는지" 만 답해서 <b>어느 출처의 행인지</b> 를 모른다. 공식
+     * 파서가 낮은 신뢰도의 행을 승격하려면 행 자체가 필요하다.
+     */
+    Optional<EconEvent> findByEventDateAndRegionAndTitle(
+            LocalDate eventDate, String region, String title);
 }

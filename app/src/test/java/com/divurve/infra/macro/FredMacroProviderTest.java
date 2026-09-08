@@ -41,7 +41,7 @@ class FredMacroProviderTest {
     void setUp() {
         builder = RestClient.builder();
         server = MockRestServiceServer.bindTo(builder).build();
-        props = new FredProperties("https://api.stlouisfed.org/fred", "TEST_KEY");
+        props = new FredProperties("https://api.stlouisfed.org/fred", "TEST_KEY", false, "0 10 4 * * *");
     }
 
     private FredMacroProvider provider() {
@@ -85,7 +85,7 @@ class FredMacroProviderTest {
 
     @Test
     void missing_api_key_throws_before_calling_fred() {
-        props = new FredProperties("https://api.stlouisfed.org/fred", null);
+        props = new FredProperties("https://api.stlouisfed.org/fred", null, false, "0 10 4 * * *");
         assertThatThrownBy(() -> provider().fetchLatest("DGS10"))
             .isInstanceOf(IllegalStateException.class);
         server.verify();
@@ -120,7 +120,7 @@ class FredMacroProviderTest {
 
     @Test
     void blank_api_key_throws() {
-        props = new FredProperties("https://api.stlouisfed.org/fred", "   ");
+        props = new FredProperties("https://api.stlouisfed.org/fred", "   ", false, "0 10 4 * * *");
         assertThatThrownBy(() -> provider().fetchLatest("DGS10"))
             .isInstanceOf(IllegalStateException.class);
         server.verify();
