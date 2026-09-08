@@ -24,6 +24,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
@@ -54,8 +55,21 @@ public class ForecastService {
     /** 기본 지평 (FR-FC-02). */
     public static final int DEFAULT_HORIZON_DAYS = 30;
 
-    /** 허용 지평 (FR-FC-02). */
-    private static final List<Integer> ALLOWED_HORIZON_DAYS = List.of(30, 90);
+    /**
+     * 허용 지평 (FR-FC-02, 이슈 #121). 팬 차트 세분화 요청으로 30·90 두 값에서 확장했다.
+     *
+     * <p>지평은 {@link FanChartCalculator#analyticInterval} 의 {@code sqrt(horizonDays / 252)} 스케일링에만
+     * 쓰이므로 값을 늘려도 30·90 의 산출값은 그대로다({@code ForecastServiceTest} 의 기존 30·90 단정문으로
+     * 회귀 확인). {@code /forecast/model-performance} 는 워크포워드 폴드 24개를 채우려면
+     * {@code 관측 수 >= horizonDays + 514} 가 필요한데(레포 히스토리 조회가 5년치, 약 1,290개 이상의
+     * 관측을 확보하므로) 180일 지평도 폴드 부족 없이 24개를 그대로 채운다 — 별도 예외 처리를 두지 않는다.
+     */
+    private static final List<Integer> ALLOWED_HORIZON_DAYS = List.of(7, 14, 30, 60, 90, 180);
+
+    /** {@link #validateHorizon} 오류 메시지에 쓸, 사람이 읽기 좋은 허용 지평 표기 ({@code "7·14·30·60·90·180"}). */
+    private static final String ALLOWED_HORIZON_DAYS_DISPLAY = ALLOWED_HORIZON_DAYS.stream()
+            .map(String::valueOf)
+            .collect(Collectors.joining("·"));
 
     /** 응답 {@code history} 로 내려보낼 최근 관측 수. */
     private static final int HISTORY_POINTS = 90;
@@ -119,7 +133,7 @@ public class ForecastService {
      *
      * @param userId      조회 사용자 (자산 영향 계산용)
      * @param rawPairCode {@code pair_code} 원본 값 ({@code USDKRW} 또는 {@code USD_KRW})
-     * @param horizonDays 지평 (30 또는 90)
+     * @param horizonDays 지평 (7·14·30·60·90·180 중 하나)
      * @return 예측 범위 데이터
      * @throws InvalidRequestException 통화쌍 표기나 지평이 허용 범위를 벗어난 경우
      */
@@ -192,7 +206,7 @@ public class ForecastService {
      * {@code rw_improvement} 는 0 이고 방향 적중률도 낮게 나온다 — 숨기지 않고 그대로 보여준다(명세 §5.8).
      *
      * @param rawPairCode {@code pair_code}
-     * @param horizonDays 지평 (30 또는 90)
+     * @param horizonDays 지평 (7·14·30·60·90·180 중 하나)
      * @return 성적표
      * @throws InvalidRequestException 표기·지평 오류, 또는 검증할 관측이 모자란 경우
      */
@@ -290,7 +304,9 @@ public class ForecastService {
     private void validateHorizon(int horizonDays) {
         if (!ALLOWED_HORIZON_DAYS.contains(horizonDays)) {
             throw new InvalidRequestException(
-                    "horizon_days 는 30 또는 90 이어야 합니다 (입력 %d).".formatted(horizonDays), "horizon_days");
+                    "horizon_days 는 %s 중 하나여야 합니다 (입력 %d)."
+                            .formatted(ALLOWED_HORIZON_DAYS_DISPLAY, horizonDays),
+                    "horizon_days");
         }
     }
 

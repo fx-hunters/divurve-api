@@ -61,7 +61,8 @@ public class ForecastController {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200", description = "예측 범위. 시장이 급변해도 200 이다(FR-SF-01)."),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "400", description = "pair_code 표기 오류 또는 horizon_days 가 30·90 이 아님",
+                    responseCode = "400",
+                    description = "pair_code 표기 오류 또는 horizon_days 가 7·14·30·60·90·180 중 하나가 아님",
                     content = @Content),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "401", description = "인증 없음", content = @Content)
@@ -71,7 +72,7 @@ public class ForecastController {
             @CurrentUser UUID userId,
             @Parameter(description = "통화쌍 (USDKRW · USDJPY · EURUSD)", example = "USDKRW")
             @RequestParam("pair_code") String pairCode,
-            @Parameter(description = "지평 (30 또는 90). 기본 30", example = "30")
+            @Parameter(description = "지평 (7·14·30·60·90·180 중 하나). 기본 30", example = "30")
             @RequestParam(name = "horizon_days", defaultValue = "30") int horizonDays) {
 
         ForecastService.ForecastView view = forecastService.getForecast(userId, pairCode, horizonDays);
@@ -110,13 +111,16 @@ public class ForecastController {
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "성적표"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "400", description = "표기·지평 오류 또는 검증할 관측 부족", content = @Content)
+                    responseCode = "400",
+                    description = "pair_code 표기 오류, horizon_days 가 7·14·30·60·90·180 중 하나가 아님, "
+                            + "또는 검증할 관측 부족",
+                    content = @Content)
     })
     @GetMapping("/forecast/model-performance")
     public ApiResponse<ModelPerformanceResponse> getModelPerformance(
             @Parameter(description = "통화쌍", example = "USDKRW")
             @RequestParam("pair_code") String pairCode,
-            @Parameter(description = "지평 (30 또는 90). 기본 30", example = "30")
+            @Parameter(description = "지평 (7·14·30·60·90·180 중 하나). 기본 30", example = "30")
             @RequestParam(name = "horizon_days", defaultValue = "30") int horizonDays) {
 
         return ApiResponse.of(
