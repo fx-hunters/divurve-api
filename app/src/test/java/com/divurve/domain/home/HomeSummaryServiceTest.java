@@ -2,6 +2,8 @@ package com.divurve.domain.home;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -133,20 +135,14 @@ class HomeSummaryServiceTest {
                 RiskProfileService.LIMITATION_NOTE);
     }
 
-    private ForecastView forecastView() {
+    private ForecastService.HomeForecastView forecastView() {
         return forecastView(List.of());
     }
 
-    private ForecastView forecastView(List<HistoryPoint> history) {
-        return new ForecastView(
-                "USDKRW", 30, TODAY, 1382.40, 1382.40,
-                history, List.of(), List.of(),
-                new IntervalView(1346.0, 1431.0, 0.06),
-                new VolatilityView(0.061, 0.72, "elevated"),
-                new UserImpactView(157_900L, 15_790_000L),
-                new LabelsView("band", "path"),
-                new ModelInfoView(List.of(0.5, 0.8), "assumption", "limitation"),
-                "note", "disclaimer");
+    /** 이슈 #168 — 홈은 경량 조회를 쓴다. band·modelPath·user_impact 는 애초에 만들어지지 않는다. */
+    private ForecastService.HomeForecastView forecastView(List<HistoryPoint> history) {
+        return new ForecastService.HomeForecastView(
+                "USDKRW", 1382.40, new IntervalView(1346.0, 1431.0, 0.06), history);
     }
 
     @Test
@@ -160,9 +156,9 @@ class HomeSummaryServiceTest {
     void getSummary_블록_순서와_키가_고정이다() {
         stubUserExists();
         when(marketRegimeService.getRegime()).thenReturn(regimeView("elevated", "caution"));
-        when(xrayService.getPortfolio(userId)).thenReturn(portfolioWithFx());
+        when(xrayService.getPortfolio(eq(userId), any())).thenReturn(portfolioWithFx());
         when(riskProfileService.getRiskProfile(userId)).thenReturn(riskProfileDiagnosed());
-        when(forecastService.getForecast(userId, "USDKRW", ForecastService.DEFAULT_HORIZON_DAYS))
+        when(forecastService.getForecastSummary("USDKRW", ForecastService.DEFAULT_HORIZON_DAYS))
                 .thenReturn(forecastView());
         when(forecastService.getEvents(14)).thenReturn(List.of());
 
@@ -178,9 +174,9 @@ class HomeSummaryServiceTest {
     void getSummary_외화자산이_있으면_fx_status가_filled이고_수치를_담는다() {
         stubUserExists();
         when(marketRegimeService.getRegime()).thenReturn(regimeView("normal", "normal"));
-        when(xrayService.getPortfolio(userId)).thenReturn(portfolioWithFx());
+        when(xrayService.getPortfolio(eq(userId), any())).thenReturn(portfolioWithFx());
         when(riskProfileService.getRiskProfile(userId)).thenReturn(riskProfileDiagnosed());
-        when(forecastService.getForecast(userId, "USDKRW", ForecastService.DEFAULT_HORIZON_DAYS))
+        when(forecastService.getForecastSummary("USDKRW", ForecastService.DEFAULT_HORIZON_DAYS))
                 .thenReturn(forecastView());
         when(forecastService.getEvents(14)).thenReturn(List.of());
 
@@ -202,9 +198,9 @@ class HomeSummaryServiceTest {
     void getSummary_외화자산이_없으면_fx_status가_empty다() {
         stubUserExists();
         when(marketRegimeService.getRegime()).thenReturn(regimeView("normal", "normal"));
-        when(xrayService.getPortfolio(userId)).thenReturn(portfolioWithoutFx());
+        when(xrayService.getPortfolio(eq(userId), any())).thenReturn(portfolioWithoutFx());
         when(riskProfileService.getRiskProfile(userId)).thenReturn(riskProfileNotMeasured());
-        when(forecastService.getForecast(userId, "USDKRW", ForecastService.DEFAULT_HORIZON_DAYS))
+        when(forecastService.getForecastSummary("USDKRW", ForecastService.DEFAULT_HORIZON_DAYS))
                 .thenReturn(forecastView());
         when(forecastService.getEvents(14)).thenReturn(List.of());
 
@@ -217,9 +213,9 @@ class HomeSummaryServiceTest {
     void getSummary_미진단이면_profile_fit이_not_measured다() {
         stubUserExists();
         when(marketRegimeService.getRegime()).thenReturn(regimeView("normal", "normal"));
-        when(xrayService.getPortfolio(userId)).thenReturn(portfolioWithoutFx());
+        when(xrayService.getPortfolio(eq(userId), any())).thenReturn(portfolioWithoutFx());
         when(riskProfileService.getRiskProfile(userId)).thenReturn(riskProfileNotMeasured());
-        when(forecastService.getForecast(userId, "USDKRW", ForecastService.DEFAULT_HORIZON_DAYS))
+        when(forecastService.getForecastSummary("USDKRW", ForecastService.DEFAULT_HORIZON_DAYS))
                 .thenReturn(forecastView());
         when(forecastService.getEvents(14)).thenReturn(List.of());
 
@@ -233,9 +229,9 @@ class HomeSummaryServiceTest {
     void getSummary_forecast_계산불가시_empty_블록으로_처리하고_에러를_내지_않는다() {
         stubUserExists();
         when(marketRegimeService.getRegime()).thenReturn(regimeView("normal", "normal"));
-        when(xrayService.getPortfolio(userId)).thenReturn(portfolioWithoutFx());
+        when(xrayService.getPortfolio(eq(userId), any())).thenReturn(portfolioWithoutFx());
         when(riskProfileService.getRiskProfile(userId)).thenReturn(riskProfileNotMeasured());
-        when(forecastService.getForecast(userId, "USDKRW", ForecastService.DEFAULT_HORIZON_DAYS))
+        when(forecastService.getForecastSummary("USDKRW", ForecastService.DEFAULT_HORIZON_DAYS))
                 .thenThrow(new InvalidRequestException("변동성을 계산할 과거 관측이 부족합니다."));
         when(forecastService.getEvents(14)).thenReturn(List.of());
 
@@ -249,9 +245,9 @@ class HomeSummaryServiceTest {
     void getSummary_goals_route는_목표_목록을_조회한다() {
         stubUserExists();
         when(marketRegimeService.getRegime()).thenReturn(regimeView("normal", "normal"));
-        when(xrayService.getPortfolio(userId)).thenReturn(portfolioWithoutFx());
+        when(xrayService.getPortfolio(eq(userId), any())).thenReturn(portfolioWithoutFx());
         when(riskProfileService.getRiskProfile(userId)).thenReturn(riskProfileNotMeasured());
-        when(forecastService.getForecast(userId, "USDKRW", ForecastService.DEFAULT_HORIZON_DAYS))
+        when(forecastService.getForecastSummary("USDKRW", ForecastService.DEFAULT_HORIZON_DAYS))
                 .thenReturn(forecastView());
         when(forecastService.getEvents(14)).thenReturn(List.of());
         Goal goal = Goal.builder(User.create("a@b.com", "u", null), "여행자금", "wealth", "travel", "USD")
@@ -271,9 +267,9 @@ class HomeSummaryServiceTest {
     void getSummary_목표가_없으면_goals_route는_empty다() {
         stubUserExists();
         when(marketRegimeService.getRegime()).thenReturn(regimeView("normal", "normal"));
-        when(xrayService.getPortfolio(userId)).thenReturn(portfolioWithoutFx());
+        when(xrayService.getPortfolio(eq(userId), any())).thenReturn(portfolioWithoutFx());
         when(riskProfileService.getRiskProfile(userId)).thenReturn(riskProfileNotMeasured());
-        when(forecastService.getForecast(userId, "USDKRW", ForecastService.DEFAULT_HORIZON_DAYS))
+        when(forecastService.getForecastSummary("USDKRW", ForecastService.DEFAULT_HORIZON_DAYS))
                 .thenReturn(forecastView());
         when(forecastService.getEvents(14)).thenReturn(List.of());
         when(goalService.listByOwner(userId)).thenReturn(List.of());
@@ -288,9 +284,9 @@ class HomeSummaryServiceTest {
     void getSummary_attention은_시장_배지와_임박_일정을_담는다() {
         stubUserExists();
         when(marketRegimeService.getRegime()).thenReturn(regimeView("stress", "turbulent"));
-        when(xrayService.getPortfolio(userId)).thenReturn(portfolioWithoutFx());
+        when(xrayService.getPortfolio(eq(userId), any())).thenReturn(portfolioWithoutFx());
         when(riskProfileService.getRiskProfile(userId)).thenReturn(riskProfileNotMeasured());
-        when(forecastService.getForecast(userId, "USDKRW", ForecastService.DEFAULT_HORIZON_DAYS))
+        when(forecastService.getForecastSummary("USDKRW", ForecastService.DEFAULT_HORIZON_DAYS))
                 .thenReturn(forecastView());
         // 이슈 #162 — 창을 쿼리로 내렸으므로 14 일이라는 창 자체를 넘기는지가 검증 대상이다.
         // 이 사용자는 보유 자산이 없어(portfolioWithoutFx) 이슈 #166 필터가 걸리지 않는다.
@@ -373,9 +369,9 @@ class HomeSummaryServiceTest {
             List<ForecastService.EconomicEventView> events) {
         stubUserExists();
         when(marketRegimeService.getRegime()).thenReturn(regimeView("normal", "normal"));
-        when(xrayService.getPortfolio(userId)).thenReturn(portfolio);
+        when(xrayService.getPortfolio(eq(userId), any())).thenReturn(portfolio);
         when(riskProfileService.getRiskProfile(userId)).thenReturn(riskProfileNotMeasured());
-        when(forecastService.getForecast(userId, "USDKRW", ForecastService.DEFAULT_HORIZON_DAYS))
+        when(forecastService.getForecastSummary("USDKRW", ForecastService.DEFAULT_HORIZON_DAYS))
                 .thenReturn(forecastView());
         when(forecastService.getEvents(14)).thenReturn(events);
     }
@@ -400,9 +396,11 @@ class HomeSummaryServiceTest {
                 new ConcentrationView("USD", 0.6388, 0.60, "risk_profile.balanced", "above_threshold", 0.0388),
                 new SensitivityView(247_200L, Map.of("USD", 157_900L, "JPY", 54_700L)),
                 null, true);
+        when(xrayService.getPortfolio(eq(userId), any())).thenReturn(snapshot);
+        // XrayController 는 위험성향을 따로 쓰지 않아 1인자 조회를 그대로 쓴다(이슈 #168).
         when(xrayService.getPortfolio(userId)).thenReturn(snapshot);
         when(riskProfileService.getRiskProfile(userId)).thenReturn(riskProfileNotMeasured());
-        when(forecastService.getForecast(userId, "USDKRW", ForecastService.DEFAULT_HORIZON_DAYS))
+        when(forecastService.getForecastSummary("USDKRW", ForecastService.DEFAULT_HORIZON_DAYS))
                 .thenReturn(forecastView());
         when(forecastService.getEvents(14)).thenReturn(List.of());
         when(goalService.listByOwner(userId)).thenReturn(List.of());
@@ -420,9 +418,9 @@ class HomeSummaryServiceTest {
     void getSummary_외화자산이_없으면_fx_status_exposure는_빈_배열이다() {
         stubUserExists();
         when(marketRegimeService.getRegime()).thenReturn(regimeView("normal", "normal"));
-        when(xrayService.getPortfolio(userId)).thenReturn(portfolioWithoutFx());
+        when(xrayService.getPortfolio(eq(userId), any())).thenReturn(portfolioWithoutFx());
         when(riskProfileService.getRiskProfile(userId)).thenReturn(riskProfileNotMeasured());
-        when(forecastService.getForecast(userId, "USDKRW", ForecastService.DEFAULT_HORIZON_DAYS))
+        when(forecastService.getForecastSummary("USDKRW", ForecastService.DEFAULT_HORIZON_DAYS))
                 .thenReturn(forecastView());
         when(forecastService.getEvents(14)).thenReturn(List.of());
 
@@ -436,12 +434,12 @@ class HomeSummaryServiceTest {
     void getSummary_forecast_history는_최근_30영업일만_담는다() {
         stubUserExists();
         when(marketRegimeService.getRegime()).thenReturn(regimeView("normal", "normal"));
-        when(xrayService.getPortfolio(userId)).thenReturn(portfolioWithoutFx());
+        when(xrayService.getPortfolio(eq(userId), any())).thenReturn(portfolioWithoutFx());
         when(riskProfileService.getRiskProfile(userId)).thenReturn(riskProfileNotMeasured());
         List<HistoryPoint> fullHistory = IntStream.range(0, 40)
                 .mapToObj(i -> new HistoryPoint(TODAY.minusDays(40 - i), 1300.0 + i))
                 .toList();
-        when(forecastService.getForecast(userId, "USDKRW", ForecastService.DEFAULT_HORIZON_DAYS))
+        when(forecastService.getForecastSummary("USDKRW", ForecastService.DEFAULT_HORIZON_DAYS))
                 .thenReturn(forecastView(fullHistory));
         when(forecastService.getEvents(14)).thenReturn(List.of());
 
@@ -456,12 +454,12 @@ class HomeSummaryServiceTest {
     void getSummary_forecast_history가_30개_미만이면_전부_담는다() {
         stubUserExists();
         when(marketRegimeService.getRegime()).thenReturn(regimeView("normal", "normal"));
-        when(xrayService.getPortfolio(userId)).thenReturn(portfolioWithoutFx());
+        when(xrayService.getPortfolio(eq(userId), any())).thenReturn(portfolioWithoutFx());
         when(riskProfileService.getRiskProfile(userId)).thenReturn(riskProfileNotMeasured());
         List<HistoryPoint> shortHistory = List.of(
                 new HistoryPoint(TODAY.minusDays(2), 1380.0),
                 new HistoryPoint(TODAY.minusDays(1), 1381.0));
-        when(forecastService.getForecast(userId, "USDKRW", ForecastService.DEFAULT_HORIZON_DAYS))
+        when(forecastService.getForecastSummary("USDKRW", ForecastService.DEFAULT_HORIZON_DAYS))
                 .thenReturn(forecastView(shortHistory));
         when(forecastService.getEvents(14)).thenReturn(List.of());
 

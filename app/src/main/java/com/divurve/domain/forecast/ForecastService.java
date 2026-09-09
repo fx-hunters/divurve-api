@@ -300,6 +300,51 @@ public class ForecastService {
     }
 
     /**
+     * 홈 요약이 쓰는 것만 만드는 경량 조회 (이슈 #168).
+     *
+     * <p>{@code GET /home/summary} 의 {@code forecast} 블록은 통화쌍·현재값·{@code interval_80}·
+     * 스파크라인 네 가지만 쓴다. {@link #getForecast} 는 그 밖에 {@code band}(지평 일수만큼 루프)·
+     * {@code modelPath}·{@code user_impact}·{@code volatility}·{@code modelInfo} 를 만드는데,
+     * 홈에서는 전부 계산만 하고 버려진다.
+     *
+     * <p><b>{@code userId} 를 받지 않는다.</b> {@code user_impact} 를 만들지 않으므로 보유 자산을
+     * 볼 이유가 없다 — {@code holdings}·{@code deposits} 재조회가 통째로 사라진다. 이 두 표는
+     * {@code XrayService} 가 같은 요청에서 이미 읽는다.
+     *
+     * <p><b>값은 {@link #getForecast} 와 같다.</b> {@code interval_80} 은 {@code band} 의 마지막
+     * 지점이므로 루프를 돌지 않고 그 지점 하나만 같은 순수 함수로 구한다 — 덜 부르는 것이지
+     * 다르게 계산하는 것이 아니다. {@code ForecastServiceTest} 가 두 경로의 값이 일치하는지
+     * 고정한다.
+     *
+     * @param rawPairCode {@code pair_code} 원본 값
+     * @param horizonDays 지평 (7·14·30·60·90·180 중 하나)
+     * @return 홈 요약용 예측 (통화쌍·현재값·80% 구간·과거 관측)
+     * @throws InvalidRequestException 통화쌍 표기나 지평이 허용 범위를 벗어난 경우
+     */
+    @Transactional(readOnly = true)
+    public HomeForecastView getForecastSummary(String rawPairCode, int horizonDays) {
+        PairCode pair = PairCode.parse(rawPairCode);
+        validateHorizon(horizonDays);
+
+        SupportedPairHistory support = resolveSupportedPairHistory(pair);
+        List<FxRateHistoryProvider.HistoryRateSnapshot> history = support.history();
+
+        double currentRate = crossRateResolver.latestRate(pair);
+        // 드리프트 0 이므로 기준선은 현재 환율과 같다 — getForecast 의 baseRate 와 같은 값이다.
+        double baseRate = currentRate;
+
+        // band 의 마지막 지점이 곧 interval_80 이다. 앞의 지점들은 홈이 쓰지 않는다.
+        FanChartCalculator.PathPoint last =
+                FanChartCalculator.analyticInterval(baseRate, support.vol30d(), horizonDays);
+
+        return new HomeForecastView(
+                pair.canonical(),
+                currentRate,
+                new IntervalView(last.p80Lo(), last.p80Hi(), (last.p80Hi() - last.p80Lo()) / baseRate),
+                tailHistory(history));
+    }
+
+    /**
      * 경제 일정 조회 ({@code GET /events}).
      *
      * @return 향후 {@value #EVENTS_WINDOW_DAYS}일 이벤트 (날짜 오름차순)
@@ -518,6 +563,23 @@ public class ForecastService {
 
     /** 환율 1퍼센트 변동 시 자산 영향. */
     public record UserImpactView(long per1pctKrw, long assetKrw) {
+    }
+
+    /**
+     * 홈 요약용 예측 (이슈 #168). {@link ForecastView} 에서 홈이 실제로 쓰는 네 가지만 담는다.
+     *
+     * <p>{@code HomeSummaryService} 에 같은 뜻의 {@code ForecastSummaryView} 가 따로 있다 —
+     * 그쪽은 응답 조립용이고 이것은 조회 결과다. 단순명이 겹치면 import 로 구분할 수 없어
+     * 이름을 달리한다.
+     *
+     * @param pairCode    통화쌍
+     * @param currentRate 현재 환율
+     * @param interval80  80퍼센트 예측 구간 (지평 마지막 지점)
+     * @param history     과거 관측 (시간순)
+     */
+    public record HomeForecastView(
+            String pairCode, double currentRate, IntervalView interval80,
+            List<HistoryPoint> history) {
     }
 
     /** 표시 라벨. 음영을 "변동성"이라 부르지 않는다(FR-FC-04·05). */

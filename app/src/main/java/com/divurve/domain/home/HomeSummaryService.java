@@ -5,7 +5,6 @@ import com.divurve.common.exception.InvalidRequestException;
 import com.divurve.common.exception.NotFoundException;
 import com.divurve.domain.forecast.ForecastService;
 import com.divurve.domain.forecast.ForecastService.EconomicEventView;
-import com.divurve.domain.forecast.ForecastService.ForecastView;
 import com.divurve.domain.forecast.ForecastService.HistoryPoint;
 import com.divurve.domain.goal.GoalService;
 import com.divurve.domain.goal.entity.Goal;
@@ -106,9 +105,11 @@ public class HomeSummaryService {
                 .orElseThrow(() -> new NotFoundException("사용자를 찾을 수 없습니다."));
 
         MarketRegimeView regime = marketRegimeService.getRegime();
-        PortfolioSnapshot portfolio = xrayService.getPortfolio(userId);
+        // 위험성향을 먼저 읽어 XrayService 에 넘긴다(이슈 #168). 그러지 않으면 이 서비스와
+        // XrayService 가 risk_profiles 를 각각 읽는다 — 쿼리 메서드라 1차 캐시를 타지 않는다.
         RiskProfileView riskProfile = riskProfileService.getRiskProfile(userId);
-        ForecastBlockResult forecastResult = resolveForecast(userId);
+        PortfolioSnapshot portfolio = xrayService.getPortfolio(userId, riskProfile);
+        ForecastBlockResult forecastResult = resolveForecast();
 
         TodayView today = resolveToday(regime, portfolio);
         ProfileFitView profileFit = resolveProfileFit(riskProfile, portfolio);
@@ -227,10 +228,12 @@ public class HomeSummaryService {
      * {@code forecast} 블록 — 과거 관측이 부족해 계산이 불가능하면(신규 통화쌍 등) 에러가 아니라
      * 빈 블록으로 처리한다(명세 §5.11 "데이터가 없으면 빈 상태 전용 처리").
      */
-    private ForecastBlockResult resolveForecast(UUID userId) {
+    private ForecastBlockResult resolveForecast() {
         try {
-            ForecastView forecast = forecastService.getForecast(
-                    userId, DEFAULT_PAIR_CODE, ForecastService.DEFAULT_HORIZON_DAYS);
+            // 홈이 쓰는 네 가지만 만든다(이슈 #168). band·modelPath·user_impact 를 만들지 않으므로
+            // holdings·deposits 재조회가 사라진다 — 그 두 표는 XrayService 가 이미 읽는다.
+            ForecastService.HomeForecastView forecast = forecastService.getForecastSummary(
+                    DEFAULT_PAIR_CODE, ForecastService.DEFAULT_HORIZON_DAYS);
             ForecastSummaryView view = new ForecastSummaryView(
                     forecast.pairCode(),
                     forecast.currentRate(),

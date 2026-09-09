@@ -95,6 +95,31 @@ public class XrayService {
      */
     @Transactional(readOnly = true)
     public PortfolioSnapshot getPortfolio(UUID userId) {
+        // 없는 사용자는 위험성향을 읽기 전에 404 다. 이 줄이 없으면 존재하지도 않는 사용자를
+        // 위해 risk_profiles 를 한 번 더 친다 — 아래 위임에서 requireUser 가 다시 불리지만
+        // 같은 트랜잭션의 1차 캐시를 타므로 SELECT 는 늘지 않는다.
+        requireUser(userId);
+        return getPortfolio(userId, riskProfileService.getRiskProfile(userId));
+    }
+
+    /**
+     * 위험성향을 <b>이미 들고 있는</b> 호출자를 위한 조회 (이슈 #168).
+     *
+     * <p>집중도 임계값은 위험성향에서 나오므로 이 서비스가 스스로 조회하면
+     * {@code GET /home/summary} 처럼 위험성향을 따로 쓰는 호출자에서 같은 행을 두 번 읽게 된다
+     * — {@code findByOwner_Id} 는 쿼리 메서드라 1차 캐시를 타지 않아 실제로 SELECT 가 두 번 나간다.
+     *
+     * <p>값은 {@link #getPortfolio(UUID)} 와 같다. 같은 위험성향을 넘기는 한 두 경로의 산출이
+     * 갈릴 여지가 없다 — 임계값 결정에 쓰이는 입력이 그것뿐이다.
+     *
+     * @param userId      사용자 ID (NFR-SE-03)
+     * @param riskProfile 호출자가 이미 조회한 위험성향
+     * @return 포트폴리오 스냅샷
+     * @throws NotFoundException 사용자를 찾을 수 없는 경우
+     */
+    @Transactional(readOnly = true)
+    public PortfolioSnapshot getPortfolio(UUID userId, RiskProfileView riskProfile) {
+        Objects.requireNonNull(riskProfile, "riskProfile is null");
         User user = requireUser(userId);
 
         List<Holding> holdings = holdingRepository.findByOwner_Id(userId);
@@ -109,7 +134,7 @@ public class XrayService {
                 .sum();
         long totalAssetKrw = krwAssetKrw + fxAssetKrw;
 
-        Threshold threshold = resolveThreshold(userId);
+        Threshold threshold = resolveThreshold(riskProfile);
         ConcentrationCalculator.ConcentrationResult concentration =
                 concentrationCalculator.diagnose(currencyToAssetKrw, threshold.value());
 
@@ -222,8 +247,7 @@ public class XrayService {
      * 위험성향 등급에서 집중도 기준선을 얻는다. 미측정이면 기준선도 출처도 없다 —
      * 임의의 기본값(v1 의 0.35)을 채우지 않는다(FR-DG-02, FR-IS-06).
      */
-    private Threshold resolveThreshold(UUID userId) {
-        RiskProfileView profile = riskProfileService.getRiskProfile(userId);
+    private Threshold resolveThreshold(RiskProfileView profile) {
         String grade = profile.riskType();
         Double threshold = concentrationThresholdTable.thresholdFor(grade);
         return new Threshold(threshold, threshold == null ? null : THRESHOLD_SOURCE_PREFIX + grade);

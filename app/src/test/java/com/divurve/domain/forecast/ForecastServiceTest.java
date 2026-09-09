@@ -10,6 +10,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.divurve.common.exception.InvalidRequestException;
@@ -103,6 +104,46 @@ class ForecastServiceTest {
         assertEquals(first.interval80(), second.interval80());
         assertEquals(first.band(), second.band());
         assertEquals("USDKRW", first.pairCode());
+    }
+
+    /**
+     * 이슈 #168 — 홈 경량 조회는 <b>덜 부르는 것이지 다르게 계산하는 것이 아니다.</b>
+     * 두 경로의 산출이 갈리면 같은 사용자가 홈과 Forecast 화면에서 다른 구간을 본다.
+     */
+    @Test
+    @DisplayName("홈 경량 조회의 값은 전체 조회와 정확히 같다")
+    void summaryMatchesFullForecast() {
+        givenHistory(history(LONG_HISTORY, 0.01, 0.01));
+        givenLatestRate();
+        givenNoAssets();
+
+        ForecastService.ForecastView full = service.getForecast(USER_ID, "USDKRW", 30);
+        ForecastService.HomeForecastView summary = service.getForecastSummary("USDKRW", 30);
+
+        assertEquals(full.pairCode(), summary.pairCode());
+        assertEquals(full.currentRate(), summary.currentRate());
+        assertEquals(full.interval80(), summary.interval80());
+        assertEquals(full.history(), summary.history());
+    }
+
+    @Test
+    @DisplayName("홈 경량 조회는 보유 자산을 읽지 않는다 — user_impact 를 만들지 않기 때문이다")
+    void summaryDoesNotReadHoldings() {
+        givenHistory(history(LONG_HISTORY, 0.01, 0.01));
+        givenLatestRate();
+
+        service.getForecastSummary("USDKRW", 30);
+
+        verifyNoInteractions(holdingRepository, depositRepository);
+    }
+
+    @Test
+    @DisplayName("홈 경량 조회도 통화쌍·지평 검증을 그대로 받는다")
+    void summaryValidatesInput() {
+        assertThrows(InvalidRequestException.class,
+                () -> service.getForecastSummary("USDKRW", 13));
+        assertThrows(InvalidRequestException.class,
+                () -> service.getForecastSummary("XY", 30));
     }
 
     @Test
