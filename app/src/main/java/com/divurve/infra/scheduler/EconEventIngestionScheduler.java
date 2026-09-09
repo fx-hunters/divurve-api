@@ -53,9 +53,10 @@ public class EconEventIngestionScheduler {
         try {
             EconEventIngestionService.IngestionReport report = ingestionService.ingest();
             log.info("econ_event_ingestion_completed articles={} extracted={} inserted={} "
-                    + "rejected={} duplicates={} failed_articles={}",
+                    + "rejected={} duplicates={} failed_articles={} quota_skipped={} too_long={}",
                 report.articles(), report.extracted(), report.inserted(), report.rejected(),
-                report.duplicates(), report.failedArticles());
+                report.duplicates(), report.failedArticles(),
+                report.quotaSkipped(), report.tooLong());
         } catch (RuntimeException e) {
             log.error("econ_event_ingestion_failed message={}", e.getMessage(), e);
         }

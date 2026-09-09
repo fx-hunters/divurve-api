@@ -26,7 +26,7 @@ class EconEventIngestionSchedulerTest {
         AtomicInteger calls = new AtomicInteger();
         StubIngestionService stub = new StubIngestionService(() -> {
             calls.incrementAndGet();
-            return new EconEventIngestionService.IngestionReport(2, 3, 2, 1, 0, 0);
+            return new EconEventIngestionService.IngestionReport(2, 3, 2, 1, 0, 0, 0, 0);
         });
         EconEventIngestionScheduler sut = new EconEventIngestionScheduler(stub);
 
@@ -61,6 +61,7 @@ class EconEventIngestionSchedulerTest {
 
         StubIngestionService(java.util.function.Supplier<IngestionReport> behavior) {
             super(List::of,
+                Mockito.mock(com.divurve.domain.ai.AiCallQuota.class),
                 article -> com.divurve.domain.port.EconEventExtractor.ExtractOutcome
                     .withoutLlm(List.of()),
                 Mockito.mock(EconEventRepository.class),

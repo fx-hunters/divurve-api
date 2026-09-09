@@ -121,4 +121,24 @@ public interface AiCallLogRepository extends JpaRepository<AiCallLog, UUID> {
             @Param("userId") UUID userId,
             @Param("clientIp") String clientIp,
             @Param("since") Instant since);
+
+    /**
+     * 창 안의 추출 호출 건수 (이슈 #178).
+     *
+     * <p>{@link #countChargeableSince} 는 {@code purpose} 를 구분하지 않고 전부 센다 — 전역
+     * 킬스위치는 지출 총액을 보므로 그것이 맞다. 이 쿼리는 <b>추출만</b> 세어 배치가 사용자
+     * 서술 몫을 얼마나 먹었는지 따로 본다.
+     *
+     * <p>세는 대상은 {@code countChargeableSince} 와 같은 규약이다 — {@code success} 와
+     * {@code fallback} 만 센다. {@code error} 는 결과를 얻지 못한 호출이고, 차단이 다시 차단을
+     * 깊게 만들면 창이 지나도 회복이 늦어진다.
+     *
+     * @param since 창의 시작 시각 (포함)
+     * @return 추출 호출 건수
+     */
+    @Query(value = "select count(*) from ai_call_logs l "
+            + "where l.requested_at >= cast(:since as timestamptz) "
+            + "and l.purpose = 'extract' "
+            + "and l.outcome in ('success', 'fallback')", nativeQuery = true)
+    long countExtractSince(@Param("since") Instant since);
 }

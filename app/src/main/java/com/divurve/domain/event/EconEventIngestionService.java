@@ -8,6 +8,7 @@ import com.divurve.domain.port.EconEventExtractor;
 import com.divurve.domain.port.EconEventExtractor.ExtractedEvent;
 import com.divurve.domain.port.EconEventExtractor.RawArticle;
 import com.divurve.domain.ai.AiCallLogRecorder;
+import com.divurve.domain.ai.AiCallQuota;
 import com.divurve.domain.ai.AiCallOutcome;
 import com.divurve.domain.ai.entity.AiCallLog;
 import com.divurve.domain.port.EconEventExtractor.ExtractOutcome;
@@ -17,6 +18,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.Objects;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -47,7 +49,14 @@ public class EconEventIngestionService {
 
     private static final Logger log = LoggerFactory.getLogger(EconEventIngestionService.class);
 
+    /**
+     * 원문 길이 상한. {@link EconEventExtractPreviewService} 와 <b>같은 값</b>을 쓴다 — 예전에는
+     * 미리보기에만 걸려 있어, 실제 크롤러가 붙으면 긴 기사가 배치 경로로 그대로 실릴 수 있었다.
+     */
+    static final int MAX_TEXT_LENGTH = EconEventExtractPreviewService.MAX_TEXT_LENGTH;
+
     private final RawArticleSource source;
+    private final AiCallQuota aiCallQuota;
     private final EconEventExtractor extractor;
     private final EconEventRepository repository;
     private final EconEventValidator validator;
@@ -56,12 +65,14 @@ public class EconEventIngestionService {
 
     public EconEventIngestionService(
             RawArticleSource source,
+            AiCallQuota aiCallQuota,
             EconEventExtractor extractor,
             EconEventRepository repository,
             EconEventValidator validator,
             AiCallLogRecorder aiCallLogRecorder,
             Clock clock) {
         this.source = Objects.requireNonNull(source, "source");
+        this.aiCallQuota = Objects.requireNonNull(aiCallQuota, "aiCallQuota");
         this.extractor = Objects.requireNonNull(extractor, "extractor");
         this.repository = Objects.requireNonNull(repository, "repository");
         this.validator = Objects.requireNonNull(validator, "validator");
@@ -80,7 +91,26 @@ public class EconEventIngestionService {
         counters.articles = articles.size();
 
         for (RawArticle article : articles) {
+            // 원문마다 다시 본다(이슈 #178) — 배치 도중에도 창 안의 건수가 늘어나므로, 시작할 때
+            // 한 번만 보면 상한을 넘긴 뒤에도 남은 원문을 전부 처리한다.
+            Optional<AiCallQuota.ExtractBlock> blocked = aiCallQuota.extractBlocked();
+            if (blocked.isPresent()) {
+                // 남은 원문은 건너뛰고 정상 종료한다 — 예외로 죽지 않는다(이슈 #74 제약).
+                counters.quotaSkipped = articles.size() - counters.processed;
+                log.warn("econ_event_ingestion_quota_stopped layer={} skipped={}",
+                        blocked.get().code(), counters.quotaSkipped);
+                break;
+            }
+            if (article.text() != null && article.text().length() > MAX_TEXT_LENGTH) {
+                // 상한이 미리보기에만 있던 시절에는 긴 기사가 그대로 프롬프트에 실렸다(이슈 #178).
+                log.warn("econ_event_article_too_long source_url={} length={} limit={}",
+                        article.sourceUrl(), article.text().length(), MAX_TEXT_LENGTH);
+                counters.tooLong++;
+                counters.processed++;
+                continue;
+            }
             ingestArticle(article, counters);
+            counters.processed++;
         }
 
         return counters.toReport();
@@ -161,7 +191,8 @@ public class EconEventIngestionService {
      * @param failedArticles 추출 단계에서 예외가 발생해 통째로 처리하지 못한 원문 건수
      */
     public record IngestionReport(
-            int articles, int extracted, int inserted, int rejected, int duplicates, int failedArticles) {
+            int articles, int extracted, int inserted, int rejected, int duplicates,
+            int failedArticles, int quotaSkipped, int tooLong) {
     }
 
     /** 배치 진행 중 누적되는 집계값. {@link #ingest()} 호출 범위 안에서만 살아있는 지역 상태다. */
@@ -172,9 +203,13 @@ public class EconEventIngestionService {
         private int rejected;
         private int duplicates;
         private int failedArticles;
+        private int quotaSkipped;
+        private int tooLong;
+        private int processed;
 
         private IngestionReport toReport() {
-            return new IngestionReport(articles, extracted, inserted, rejected, duplicates, failedArticles);
+            return new IngestionReport(articles, extracted, inserted, rejected, duplicates,
+                    failedArticles, quotaSkipped, tooLong);
         }
     }
 }

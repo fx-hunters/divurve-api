@@ -74,6 +74,19 @@ public class AiCallQuota {
      */
     static final String DEFAULT_GLOBAL_DAILY = "500";
 
+    /**
+     * 추출(배치) 전용 24시간 상한 (이슈 #178). <b>전역 상한보다 낮게 두는 것이 핵심이다.</b>
+     *
+     * <p>추출과 서술은 전역 상한을 공유하는데, 예전에는 서술만 그 상한을 검사했다. 그래서 배치가
+     * 새벽에 예산을 먹으면 아침에 접속한 <b>사용자가</b> 템플릿 문장을 보고, 정작 배치는 계속
+     * 돌았다 — 브레이크가 잘못된 쪽에 달려 있었다.
+     *
+     * <p>배치에 더 낮은 상한을 따로 두면 배치가 먼저 멈추고 나머지가 사용자 몫으로 남는다.
+     * 배치는 사람이 안 볼 때 도는 것이라 다음 창으로 밀려도 되지만, 서술은 지금 화면을 보고 있는
+     * 사람에게 나간다.
+     */
+    static final String DEFAULT_EXTRACT_DAILY = "150";
+
     /** 카운트 창. 위 상한들이 "24시간 안에 몇 건" 인지를 정한다. */
     static final Duration WINDOW = Duration.ofHours(24);
 
@@ -84,6 +97,12 @@ public class AiCallQuota {
      */
     private static final String UNKNOWN_IP = "";
 
+    /**
+     * 배치에는 사용자가 없다. 전역 건수만 필요한데 집계 쿼리가 {@code userId} 를 요구하므로,
+     * 어떤 행과도 일치하지 않는 고정 id 를 넘겨 사용자 층 카운트를 0 으로 만든다.
+     */
+    private static final UUID SYSTEM_USER = new UUID(0L, 0L);
+
     private static final Logger log = LoggerFactory.getLogger(AiCallQuota.class);
 
     private final AiCallLogRepository aiCallLogRepository;
@@ -92,6 +111,7 @@ public class AiCallQuota {
     private final int perDemoUserDaily;
     private final int perIpDaily;
     private final int globalDaily;
+    private final int extractDaily;
 
     public AiCallQuota(
             AiCallLogRepository aiCallLogRepository,
@@ -103,7 +123,9 @@ public class AiCallQuota {
             @Value("${app.external.anthropic.quota.per-ip-daily:"
                     + DEFAULT_PER_IP_DAILY + "}") int perIpDaily,
             @Value("${app.external.anthropic.quota.global-daily:"
-                    + DEFAULT_GLOBAL_DAILY + "}") int globalDaily) {
+                    + DEFAULT_GLOBAL_DAILY + "}") int globalDaily,
+            @Value("${app.external.anthropic.quota.extract-daily:"
+                    + DEFAULT_EXTRACT_DAILY + "}") int extractDaily) {
         this.aiCallLogRepository =
                 Objects.requireNonNull(aiCallLogRepository, "aiCallLogRepository");
         this.clock = Objects.requireNonNull(clock, "clock");
@@ -111,6 +133,7 @@ public class AiCallQuota {
         this.perDemoUserDaily = perDemoUserDaily;
         this.perIpDaily = perIpDaily;
         this.globalDaily = globalDaily;
+        this.extractDaily = extractDaily;
     }
 
     /**
@@ -151,6 +174,41 @@ public class AiCallQuota {
         return Optional.empty();
     }
 
+    /**
+     * 추출(배치) 호출이 상한을 넘는지 본다 (이슈 #178).
+     *
+     * <p><b>{@link #exceededLayer} 와 따로 두는 이유</b> — 그쪽은 {@code userId} 를 필수로 받는데
+     * 배치에는 사용자가 없다. 가짜 id 를 만들어 넘기면 사용자·IP 층이 무의미한 값을 세게 된다.
+     *
+     * <p>층 순서는 <b>추출 → 전역</b>이다. 추출 상한이 전역보다 낮으므로 보통 이쪽이 먼저 걸리고,
+     * 그 경우 "배치 몫을 다 썼다"(서술은 아직 살아 있다)와 "예산 전체가 끝났다"는 서로 다른 사건이라
+     * 구분해서 보고한다.
+     *
+     * @return 넘긴 층. 통과하면 빈 값
+     */
+    @Transactional(readOnly = true)
+    public Optional<ExtractBlock> extractBlocked() {
+        Instant since = clock.instant().minus(WINDOW);
+
+        long extractCalls = aiCallLogRepository.countExtractSince(since);
+        if (extractCalls >= extractDaily) {
+            log.warn("AI 추출 쿼터 초과 — 배치를 멈춘다. calls={} limit={} window={}",
+                    extractCalls, extractDaily, WINDOW);
+            return Optional.of(ExtractBlock.EXTRACT);
+        }
+
+        // 배치 몫이 남아 있어도 예산 전체가 끝났으면 멈춘다 — 전역은 킬스위치다.
+        Object[] counts =
+                aiCallLogRepository.countChargeableSince(SYSTEM_USER, UNKNOWN_IP, since).get(0);
+        long globalCalls = ((Number) counts[2]).longValue();
+        if (globalCalls >= globalDaily) {
+            log.warn("AI 전역 쿼터 초과 — 배치를 멈춘다. calls={} limit={} window={}",
+                    globalCalls, globalDaily, WINDOW);
+            return Optional.of(ExtractBlock.GLOBAL);
+        }
+        return Optional.empty();
+    }
+
     private Optional<Layer> blocked(Layer layer, long calls, int limit) {
         // WARN 이다 — 전역 층이 걸린 것은 서비스 전체가 폴백으로 내려간 사건이고, 사용자·IP 층도
         // 누군가 상한에 닿았다는 사실 자체가 운영자가 봐야 하는 정보다.
@@ -179,6 +237,27 @@ public class AiCallQuota {
         GLOBAL;
 
         /** DB 컬럼·API 응답에 쓰는 표기. */
+        public String code() {
+            return "quota_" + name().toLowerCase(Locale.ROOT);
+        }
+    }
+
+    /**
+     * 추출(배치)을 막은 층 (이슈 #178).
+     *
+     * <p>{@link Layer} 와 따로 둔다 — 그쪽은 사용자 요청의 폴백 사유와 짝이 맞춰져 있고
+     * ({@code AiService.FallbackReason}), 배치에는 사용자·IP 층이 없다. {@code GLOBAL} 의 코드
+     * 문자열은 양쪽이 같은 사건을 가리키므로 일부러 일치시킨다.
+     */
+    public enum ExtractBlock {
+
+        /** 배치가 자기 몫을 다 썼다. 사용자 서술은 아직 살아 있다. */
+        EXTRACT,
+
+        /** 예산 전체가 끝났다 — 킬스위치. 서술도 함께 멈춘다. */
+        GLOBAL;
+
+        /** 로그·응답에 쓰는 표기. */
         public String code() {
             return "quota_" + name().toLowerCase(Locale.ROOT);
         }
