@@ -72,8 +72,10 @@ app:
     # AI 서술(narrate) 경로 — Anthropic Claude (이슈 #73, 값 노출은 이슈 #123).
     # enabled=false(기본)면 ClaudeAiProvider 빈이 만들어지지 않고 MockAiProvider 의 템플릿 문장이 나간다.
     # true 로 켤 때 api-key 가 비어 있으면 기동 시점에 실패한다 — 켰다고 믿는 채로 템플릿이 나가는 것보다 낫다.
-    # 아래 값은 전부 환경변수로 덮어쓴다(#123) — 여기 적힌 기본값은 이슈 #73 확정값 그대로이고,
-    # 얼마로 올릴지는 #124 다. SDK 재시도 0 은 코드에 고정이다(AnthropicConfig).
+    # 아래 값은 전부 환경변수로 덮어쓴다(#123). 기본값은 #73 최초 도입값에서 이미 바뀌었다 —
+    # 지금 값(effort low · 타임아웃 12s)의 근거는 이슈 #158 이고, effort high 실측 14.8초가
+    # 5초 타임아웃을 넘겨 전건 폴백이던 것을 고치며 정했다. SDK 재시도 0 은 코드에 고정이다
+    # (AnthropicConfig.SDK_MAX_RETRIES).
     # 계산에는 관여하지 않는다(CLAUDE.md §1) — 검증된 facts 를 문장으로 옮기는 데만 쓴다.
     anthropic:
       enabled: ${ANTHROPIC_ENABLED:false}
