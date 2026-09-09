@@ -8,6 +8,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.divurve.common.exception.InvalidRequestException;
+import com.divurve.domain.goal.GoalCreateCommand;
 import com.divurve.domain.goal.GoalService;
 import com.divurve.domain.port.AuthPrincipal;
 import com.divurve.domain.port.DataSourceStatus;
@@ -104,10 +105,7 @@ class GoalControllerValidationMockMvcTest {
      * 각 규칙 자체의 단위 테스트는 {@code GoalServiceTest} 가 맡는다.
      */
     private void givenGoalServiceRejects(InvalidRequestException exception) {
-        when(goalService.create(any(), anyString(), anyString(), anyString(), anyString(),
-                org.mockito.ArgumentMatchers.anyDouble(), any(), any(), org.mockito.ArgumentMatchers.anyLong(),
-                any(), any(), org.mockito.ArgumentMatchers.anyBoolean()))
-                .thenThrow(exception);
+        when(goalService.create(any(), any(GoalCreateCommand.class))).thenThrow(exception);
     }
 
     @Test

@@ -73,6 +73,18 @@ class GoalServiceTest {
         ownerId = UUID.randomUUID();
     }
 
+    /**
+     * 플래너 필드를 비운 생성 입력. 그 다섯 값은 전부 선택이라 비우면 서버가 기본값을 정한다
+     * — 기존 케이스는 그 기본값 경로를 그대로 쓴다.
+     */
+    private static GoalCreateCommand command(String name, String kind, String purpose,
+            String currencyCode, double targetAmount, LocalDate targetDate, String recurInterval,
+            long budgetAmount, String budgetCurrencyCode, String budgetPeriod, boolean isSpeculative) {
+        return new GoalCreateCommand(name, kind, purpose, currencyCode, targetAmount, targetDate,
+                recurInterval, budgetAmount, budgetCurrencyCode, budgetPeriod, isSpeculative,
+                0.0, null, null, null, null);
+    }
+
     /** 지원 통화(예 USD)의 정상 요청 흐름에서 공통으로 필요한 스텁. */
     private void givenSupportedCurrency(String currencyCode) {
         when(perUnitFxRates.find(currencyCode)).thenReturn(Optional.of(BigDecimal.ONE));
@@ -88,8 +100,7 @@ class GoalServiceTest {
             return goal;
         });
 
-        Goal result = goalService.create(
-                ownerId,
+        Goal result = goalService.create(ownerId, command(
                 "USD 목표",
                 "deadline",
                 "TRAVEL",
@@ -100,7 +111,7 @@ class GoalServiceTest {
                 0,
                 "KRW",
                 null,
-                false);
+                false));
 
         assertThat(result).isNotNull();
         assertThat(result.getName()).isEqualTo("USD 목표");
@@ -117,9 +128,10 @@ class GoalServiceTest {
         when(userRepository.findById(ownerId)).thenReturn(Optional.of(owner));
         when(goalRepository.save(any(Goal.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
-        Goal result = goalService.create(
-                ownerId, "ETF 적립", "recurring", "STOCK_ACCUMULATION", "USD",
-                10000.0, null, "monthly", 300000, "KRW", "monthly", false);
+        Goal result = goalService.create(ownerId, new GoalCreateCommand(
+                "ETF 적립", "recurring", "STOCK_ACCUMULATION", "USD", 10000.0, null,
+                "monthly", 300000, "KRW", "monthly", false,
+                0.0, null, null, LocalDate.of(2026, 10, 1), 6));
 
         // goal_type 이 kind 를 따라가지 않으면 PlanInput.from(goal) 이 정기형을 마감형으로 넘긴다.
         assertThat(result.getGoalType()).isEqualTo(GoalType.RECURRING);
@@ -133,9 +145,10 @@ class GoalServiceTest {
         when(userRepository.findById(ownerId)).thenReturn(Optional.of(owner));
         when(goalRepository.save(any(Goal.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
-        Goal result = goalService.create(
-                ownerId, "ETF 적립", "RECURRING", "STOCK_ACCUMULATION", "USD",
-                10000.0, null, "monthly", 300000, "KRW", "monthly", false);
+        Goal result = goalService.create(ownerId, new GoalCreateCommand(
+                "ETF 적립", "RECURRING", "STOCK_ACCUMULATION", "USD", 10000.0, null,
+                "monthly", 300000, "KRW", "monthly", false,
+                0.0, null, null, LocalDate.of(2026, 10, 1), 6));
 
         assertThat(result.getGoalType()).isEqualTo(GoalType.RECURRING);
     }
@@ -147,12 +160,30 @@ class GoalServiceTest {
         when(userRepository.findById(ownerId)).thenReturn(Optional.of(owner));
         when(goalRepository.save(any(Goal.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
-        Goal nullKind = goalService.create(
-                ownerId, "USD 목표", null, "TRAVEL", "USD",
-                10000.0, LocalDate.of(2026, 12, 31), null, 0, "KRW", null, false);
-        Goal unknownKind = goalService.create(
-                ownerId, "USD 목표", "banana", "TRAVEL", "USD",
-                10000.0, LocalDate.of(2026, 12, 31), null, 0, "KRW", null, false);
+        Goal nullKind = goalService.create(ownerId, command(
+                "USD 목표",
+                null,
+                "TRAVEL",
+                "USD",
+                10000.0,
+                LocalDate.of(2026, 12, 31),
+                null,
+                0,
+                "KRW",
+                null,
+                false));
+        Goal unknownKind = goalService.create(ownerId, command(
+                "USD 목표",
+                "banana",
+                "TRAVEL",
+                "USD",
+                10000.0,
+                LocalDate.of(2026, 12, 31),
+                null,
+                0,
+                "KRW",
+                null,
+                false));
 
         assertThat(nullKind.getGoalType()).isEqualTo(GoalType.DEADLINE);
         assertThat(unknownKind.getGoalType()).isEqualTo(GoalType.DEADLINE);
@@ -164,9 +195,18 @@ class GoalServiceTest {
         givenSupportedCurrency("USD");
         when(userRepository.findById(ownerId)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> goalService.create(
-                ownerId, "USD 목표", "deadline", "TRAVEL", "USD",
-                10000.0, LocalDate.of(2026, 12, 31), null, 0, "KRW", null, false))
+        assertThatThrownBy(() -> goalService.create(ownerId, command(
+                "USD 목표",
+                "deadline",
+                "TRAVEL",
+                "USD",
+                10000.0,
+                LocalDate.of(2026, 12, 31),
+                null,
+                0,
+                "KRW",
+                null,
+                false)))
                 .isInstanceOf(NotFoundException.class)
                 .hasMessage("사용자를 찾을 수 없습니다.");
     }
@@ -176,9 +216,18 @@ class GoalServiceTest {
     void createGoalUnsupportedCurrencyRejected() {
         when(perUnitFxRates.find("GBP")).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> goalService.create(
-                ownerId, "GBP 목표", "deadline", "TRAVEL", "GBP",
-                10000.0, LocalDate.of(2026, 12, 31), null, 0, "KRW", null, false))
+        assertThatThrownBy(() -> goalService.create(ownerId, command(
+                "GBP 목표",
+                "deadline",
+                "TRAVEL",
+                "GBP",
+                10000.0,
+                LocalDate.of(2026, 12, 31),
+                null,
+                0,
+                "KRW",
+                null,
+                false)))
                 .isInstanceOf(InvalidRequestException.class)
                 .hasFieldOrPropertyWithValue("field", "currency_code");
         verifyNoInteractions(userRepository, goalRepository);
@@ -189,9 +238,18 @@ class GoalServiceTest {
     void createGoalUnknownCurrencyCodeRejected() {
         when(perUnitFxRates.find("XYZ")).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> goalService.create(
-                ownerId, "XYZ 목표", "deadline", "TRAVEL", "XYZ",
-                10000.0, LocalDate.of(2026, 12, 31), null, 0, "KRW", null, false))
+        assertThatThrownBy(() -> goalService.create(ownerId, command(
+                "XYZ 목표",
+                "deadline",
+                "TRAVEL",
+                "XYZ",
+                10000.0,
+                LocalDate.of(2026, 12, 31),
+                null,
+                0,
+                "KRW",
+                null,
+                false)))
                 .isInstanceOf(InvalidRequestException.class)
                 .hasFieldOrPropertyWithValue("field", "currency_code");
     }
@@ -199,9 +257,18 @@ class GoalServiceTest {
     @Test
     @DisplayName("목표 생성 시 target_amount 가 0 이면 400")
     void createGoalZeroAmountRejected() {
-        assertThatThrownBy(() -> goalService.create(
-                ownerId, "USD 목표", "deadline", "TRAVEL", "USD",
-                0.0, LocalDate.of(2026, 12, 31), null, 0, "KRW", null, false))
+        assertThatThrownBy(() -> goalService.create(ownerId, command(
+                "USD 목표",
+                "deadline",
+                "TRAVEL",
+                "USD",
+                0.0,
+                LocalDate.of(2026, 12, 31),
+                null,
+                0,
+                "KRW",
+                null,
+                false)))
                 .isInstanceOf(InvalidRequestException.class)
                 .hasFieldOrPropertyWithValue("field", "target_amount");
         verifyNoInteractions(userRepository, goalRepository, perUnitFxRates);
@@ -210,9 +277,18 @@ class GoalServiceTest {
     @Test
     @DisplayName("목표 생성 시 target_amount 가 음수이면 400")
     void createGoalNegativeAmountRejected() {
-        assertThatThrownBy(() -> goalService.create(
-                ownerId, "USD 목표", "deadline", "TRAVEL", "USD",
-                -500.0, LocalDate.of(2026, 12, 31), null, 0, "KRW", null, false))
+        assertThatThrownBy(() -> goalService.create(ownerId, command(
+                "USD 목표",
+                "deadline",
+                "TRAVEL",
+                "USD",
+                -500.0,
+                LocalDate.of(2026, 12, 31),
+                null,
+                0,
+                "KRW",
+                null,
+                false)))
                 .isInstanceOf(InvalidRequestException.class)
                 .hasFieldOrPropertyWithValue("field", "target_amount");
     }
@@ -222,9 +298,18 @@ class GoalServiceTest {
     void createGoalUnknownPurposeRejected() {
         givenSupportedCurrency("USD");
 
-        assertThatThrownBy(() -> goalService.create(
-                ownerId, "USD 목표", "deadline", "travel", "USD",
-                10000.0, LocalDate.of(2026, 12, 31), null, 0, "KRW", null, false))
+        assertThatThrownBy(() -> goalService.create(ownerId, command(
+                "USD 목표",
+                "deadline",
+                "travel",
+                "USD",
+                10000.0,
+                LocalDate.of(2026, 12, 31),
+                null,
+                0,
+                "KRW",
+                null,
+                false)))
                 .isInstanceOf(InvalidRequestException.class)
                 .hasFieldOrPropertyWithValue("field", "purpose");
     }
@@ -234,9 +319,18 @@ class GoalServiceTest {
     void createGoalPastTargetDateRejected() {
         givenSupportedCurrency("USD");
 
-        assertThatThrownBy(() -> goalService.create(
-                ownerId, "USD 목표", "deadline", "TRAVEL", "USD",
-                10000.0, LocalDate.of(2026, 9, 5), null, 0, "KRW", null, false))
+        assertThatThrownBy(() -> goalService.create(ownerId, command(
+                "USD 목표",
+                "deadline",
+                "TRAVEL",
+                "USD",
+                10000.0,
+                LocalDate.of(2026, 9, 5),
+                null,
+                0,
+                "KRW",
+                null,
+                false)))
                 .isInstanceOf(InvalidRequestException.class)
                 .hasFieldOrPropertyWithValue("field", "target_date");
     }
@@ -248,9 +342,18 @@ class GoalServiceTest {
         when(userRepository.findById(ownerId)).thenReturn(Optional.of(owner));
         when(goalRepository.save(any(Goal.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
-        Goal result = goalService.create(
-                ownerId, "USD 목표", "deadline", "TRAVEL", "USD",
-                10000.0, LocalDate.of(2026, 9, 7), null, 0, "KRW", null, false);
+        Goal result = goalService.create(ownerId, command(
+                "USD 목표",
+                "deadline",
+                "TRAVEL",
+                "USD",
+                10000.0,
+                LocalDate.of(2026, 9, 7),
+                null,
+                0,
+                "KRW",
+                null,
+                false));
 
         assertThat(result.getTargetDate()).isEqualTo(LocalDate.of(2026, 9, 7));
     }
@@ -262,11 +365,193 @@ class GoalServiceTest {
         when(userRepository.findById(ownerId)).thenReturn(Optional.of(owner));
         when(goalRepository.save(any(Goal.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
-        Goal result = goalService.create(
-                ownerId, "USD 목표", "deadline", "TRAVEL", "USD",
-                10000.0, null, null, 0, "KRW", null, false);
+        Goal result = goalService.create(ownerId, command(
+                "USD 목표",
+                "deadline",
+                "TRAVEL",
+                "USD",
+                10000.0,
+                null,
+                null,
+                0,
+                "KRW",
+                null,
+                false));
 
         assertThat(result.getTargetDate()).isNull();
+    }
+
+    // ── 플래너 계산 필드 (이슈 #195) ────────────────────────────────────────
+
+    /** 마감형 생성 입력. 플래너 필드 세 개만 바꿔 가며 쓴다. */
+    private static GoalCreateCommand deadlineCommand(
+            double allocatedHoldingAmount, String preferredCadence, String priorityConstraint) {
+        return new GoalCreateCommand("USD 목표", "deadline", "TRAVEL", "USD", 10000.0,
+                LocalDate.of(2026, 12, 31), null, 0, "KRW", null, false,
+                allocatedHoldingAmount, preferredCadence, priorityConstraint, null, null);
+    }
+
+    /** 정기형 생성 입력. 반복 주기·시작일·점검 기간을 바꿔 가며 쓴다. */
+    private static GoalCreateCommand recurringCommand(
+            String recurInterval, LocalDate startDate, Integer reviewHorizonMonths) {
+        return new GoalCreateCommand("ETF 적립", "recurring", "STOCK_ACCUMULATION", "USD", 10000.0,
+                null, recurInterval, 300000, "KRW", "monthly", false,
+                0.0, null, null, startDate, reviewHorizonMonths);
+    }
+
+    private void givenSavableGoal() {
+        givenSupportedCurrency("USD");
+        when(userRepository.findById(ownerId)).thenReturn(Optional.of(owner));
+        when(goalRepository.save(any(Goal.class))).thenAnswer(invocation -> invocation.getArgument(0));
+    }
+
+    @Test
+    @DisplayName("플래너 필드를 입력하면 그대로 저장한다")
+    void createGoalPersistsPlannerFields() {
+        givenSavableGoal();
+
+        Goal result = goalService.create(ownerId, deadlineCommand(3000.0, "monthly", "date"));
+
+        assertThat(result.getAllocatedHoldingAmount()).isEqualTo(3000.0);
+        assertThat(result.getPreferredCadence()).isEqualTo("monthly");
+        assertThat(result.getPriorityConstraint()).isEqualTo(PriorityConstraint.DATE);
+    }
+
+    @Test
+    @DisplayName("마감형 기본값 — 배정 0, 준비 주기 weekly, 우선 조건 amount")
+    void createDeadlineGoalUsesDeadlineDefaults() {
+        givenSavableGoal();
+
+        Goal result = goalService.create(ownerId, deadlineCommand(0.0, null, null));
+
+        assertThat(result.getAllocatedHoldingAmount()).isZero();
+        assertThat(result.getPreferredCadence()).isEqualTo("weekly");
+        assertThat(result.getPriorityConstraint()).isEqualTo(PriorityConstraint.AMOUNT);
+    }
+
+    @Test
+    @DisplayName("빈 문자열도 미입력으로 보고 기본값을 채운다")
+    void createGoalTreatsBlankPlannerFieldsAsAbsent() {
+        givenSavableGoal();
+
+        Goal result = goalService.create(ownerId, deadlineCommand(0.0, "  ", "  "));
+
+        assertThat(result.getPreferredCadence()).isEqualTo("weekly");
+        assertThat(result.getPriorityConstraint()).isEqualTo(PriorityConstraint.AMOUNT);
+    }
+
+    @Test
+    @DisplayName("정기형 기본값 — 준비 주기는 반복 주기를 따르고 우선 조건은 budget")
+    void createRecurringGoalUsesRecurringDefaults() {
+        givenSavableGoal();
+
+        Goal result = goalService.create(
+                ownerId, recurringCommand("monthly", LocalDate.of(2026, 10, 1), 6));
+
+        // V16 이 기존 정기형 행을 budget 으로 백필했다. 신규 생성분도 같은 규칙을 따라야 한다.
+        assertThat(result.getPriorityConstraint()).isEqualTo(PriorityConstraint.BUDGET);
+        assertThat(result.getPreferredCadence()).isEqualTo("monthly");
+        assertThat(result.getRecurStartDate()).isEqualTo(LocalDate.of(2026, 10, 1));
+        assertThat(result.getReviewHorizonMonths()).isEqualTo(6);
+    }
+
+    @Test
+    @DisplayName("우선 조건 세 값을 대소문자와 무관하게 소문자 상수로 저장한다")
+    void createGoalNormalizesPriorityConstraintCase() {
+        givenSavableGoal();
+
+        Goal amount = goalService.create(ownerId, deadlineCommand(0.0, null, "AMOUNT"));
+        Goal date = goalService.create(ownerId, deadlineCommand(0.0, null, "Date"));
+        Goal budget = goalService.create(ownerId, deadlineCommand(0.0, null, "budget"));
+
+        // PlanScenarioService 가 switch 로 정확히 비교한다 — 대문자로 저장하면 예외 없이
+        // 조용히 금액 우선으로 떨어진다.
+        assertThat(amount.getPriorityConstraint()).isEqualTo(PriorityConstraint.AMOUNT);
+        assertThat(date.getPriorityConstraint()).isEqualTo(PriorityConstraint.DATE);
+        assertThat(budget.getPriorityConstraint()).isEqualTo(PriorityConstraint.BUDGET);
+    }
+
+    @Test
+    @DisplayName("배정 보유 외화가 음수면 거절한다")
+    void createGoalNegativeAllocationRejected() {
+        givenSupportedCurrency("USD");
+
+        assertThatThrownBy(() -> goalService.create(ownerId, deadlineCommand(-1.0, null, null)))
+                .isInstanceOf(InvalidRequestException.class)
+                .extracting(e -> ((InvalidRequestException) e).getField())
+                .isEqualTo("allocated_holding_amount");
+    }
+
+    @Test
+    @DisplayName("배정 보유 외화가 목표 금액을 넘어도 거절하지 않는다")
+    void createGoalAllocationAboveTargetAllowed() {
+        givenSavableGoal();
+
+        Goal result = goalService.create(ownerId, deadlineCommand(999999.0, null, null));
+
+        // 계산이 max(T - H, 0) 으로 흡수하고 TARGET_ALREADY_MET 경고를 내는 쪽이 더 정확하다.
+        assertThat(result.getAllocatedHoldingAmount()).isEqualTo(999999.0);
+    }
+
+    @Test
+    @DisplayName("알 수 없는 준비 주기는 거절한다")
+    void createGoalUnknownCadenceRejected() {
+        givenSupportedCurrency("USD");
+
+        assertThatThrownBy(() -> goalService.create(ownerId, deadlineCommand(0.0, "daily", null)))
+                .isInstanceOf(InvalidRequestException.class)
+                .extracting(e -> ((InvalidRequestException) e).getField())
+                .isEqualTo("preferred_cadence");
+    }
+
+    @Test
+    @DisplayName("알 수 없는 우선 조건은 거절한다")
+    void createGoalUnknownPriorityConstraintRejected() {
+        givenSupportedCurrency("USD");
+
+        assertThatThrownBy(() -> goalService.create(ownerId, deadlineCommand(0.0, null, "vibes")))
+                .isInstanceOf(InvalidRequestException.class)
+                .extracting(e -> ((InvalidRequestException) e).getField())
+                .isEqualTo("priority_constraint");
+    }
+
+    @Test
+    @DisplayName("정기형인데 시작일이 없으면 거절한다")
+    void createRecurringGoalWithoutStartDateRejected() {
+        givenSupportedCurrency("USD");
+
+        assertThatThrownBy(() -> goalService.create(ownerId, recurringCommand("monthly", null, 6)))
+                .isInstanceOf(InvalidRequestException.class)
+                .extracting(e -> ((InvalidRequestException) e).getField())
+                .isEqualTo("start_date");
+    }
+
+    @Test
+    @DisplayName("정기형인데 점검 기간이 없거나 1개월 미만이면 거절한다")
+    void createRecurringGoalWithoutReviewHorizonRejected() {
+        givenSupportedCurrency("USD");
+        LocalDate startDate = LocalDate.of(2026, 10, 1);
+
+        assertThatThrownBy(() -> goalService.create(ownerId, recurringCommand("monthly", startDate, null)))
+                .isInstanceOf(InvalidRequestException.class)
+                .extracting(e -> ((InvalidRequestException) e).getField())
+                .isEqualTo("review_horizon_months");
+        assertThatThrownBy(() -> goalService.create(ownerId, recurringCommand("monthly", startDate, 0)))
+                .isInstanceOf(InvalidRequestException.class)
+                .extracting(e -> ((InvalidRequestException) e).getField())
+                .isEqualTo("review_horizon_months");
+    }
+
+    @Test
+    @DisplayName("정기형의 반복 주기가 알 수 없는 값이면 거절한다")
+    void createRecurringGoalUnknownIntervalRejected() {
+        givenSupportedCurrency("USD");
+
+        assertThatThrownBy(() -> goalService.create(
+                ownerId, recurringCommand("daily", LocalDate.of(2026, 10, 1), 6)))
+                .isInstanceOf(InvalidRequestException.class)
+                .extracting(e -> ((InvalidRequestException) e).getField())
+                .isEqualTo("preferred_cadence");
     }
 
     @Test

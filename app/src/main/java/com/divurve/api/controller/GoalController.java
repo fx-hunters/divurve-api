@@ -9,6 +9,7 @@ import com.divurve.api.dto.goal.GoalResponse;
 import com.divurve.api.dto.goal.GoalUpdateRequest;
 import com.divurve.common.architecture.WebAdapter;
 import com.divurve.common.response.ApiResponse;
+import com.divurve.domain.goal.GoalCreateCommand;
 import com.divurve.domain.goal.GoalService;
 import com.divurve.domain.goal.entity.Goal;
 import io.swagger.v3.oas.annotations.Operation;
@@ -64,8 +65,7 @@ public class GoalController {
     public ApiResponse<GoalResponse> createGoal(
             @CurrentUser UUID userId,
             @Valid @RequestBody GoalCreateRequest request) {
-        Goal goal = goalService.create(
-                userId,
+        Goal goal = goalService.create(userId, new GoalCreateCommand(
                 request.name(),
                 request.kind(),
                 request.purpose(),
@@ -76,7 +76,12 @@ public class GoalController {
                 request.budgetAmount(),
                 request.budgetCurrencyCode(),
                 request.budgetPeriod(),
-                request.isSpeculative());
+                request.isSpeculative(),
+                request.allocatedHoldingAmount(),
+                request.preferredCadence(),
+                request.priorityConstraint(),
+                request.startDate(),
+                request.reviewHorizonMonths()));
         return ApiResponse.of(toGoalResponse(userId, goal));
     }
 
