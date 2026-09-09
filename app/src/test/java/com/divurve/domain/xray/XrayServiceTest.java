@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.entry;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.divurve.common.exception.NotFoundException;
@@ -107,6 +109,49 @@ class XrayServiceTest {
         assertThat(service().getPortfolio(userId).sampleData()).isFalse();
     }
 
+
+    /**
+     * 이슈 #168 — 위험성향을 이미 든 호출자는 그것을 넘긴다. 이 서비스가 다시 조회하면
+     * {@code GET /home/summary} 에서 {@code risk_profiles} 를 두 번 읽게 된다
+     * ({@code findByOwner_Id} 는 쿼리 메서드라 1차 캐시를 타지 않는다).
+     */
+    @Test
+    @DisplayName("위험성향을 넘겨 받으면 다시 조회하지 않는다")
+    void 위험성향을_넘기면_다시_조회하지_않는다() {
+        givenUser();
+        givenFixturePortfolio();
+        RiskProfileView profile = new RiskProfileView(
+                "simple_done", "balanced", "균형항로형", 4, AS_OF, null, null, null, null);
+
+        service().getPortfolio(userId, profile);
+
+        verify(riskProfileService, never()).getRiskProfile(userId);
+    }
+
+    /** 넘겨 받은 경로와 스스로 조회한 경로의 산출이 갈리면 홈과 X-Ray 가 다른 값을 보인다. */
+    @Test
+    @DisplayName("두 오버로드는 같은 위험성향에 같은 스냅샷을 낸다")
+    void 두_오버로드는_같은_값을_낸다() {
+        givenUser();
+        givenFixturePortfolio();
+        givenRiskGrade("balanced");
+        RiskProfileView profile = new RiskProfileView(
+                "simple_done", "balanced", "균형항로형", 4, AS_OF, null, null, null, null);
+
+        XrayService.PortfolioSnapshot selfLookup = service().getPortfolio(userId);
+        XrayService.PortfolioSnapshot passedIn = service().getPortfolio(userId, profile);
+
+        assertThat(passedIn.concentration()).isEqualTo(selfLookup.concentration());
+        assertThat(passedIn.fxRatio()).isEqualTo(selfLookup.fxRatio());
+        assertThat(passedIn.currencyToAssetKrw()).isEqualTo(selfLookup.currencyToAssetKrw());
+    }
+
+    @Test
+    @DisplayName("위험성향을 null 로 넘기면 실패한다 — 조용히 임계값을 잃지 않는다")
+    void 위험성향이_null이면_실패한다() {
+        assertThatThrownBy(() -> service().getPortfolio(userId, null))
+                .isInstanceOf(NullPointerException.class);
+    }
 
     @Test
     @DisplayName("명세 §4 fixture — 총자산 68,400,000 / 외화 24,720,000 / 비중 0.3614 / 민감도 합 247,200")
