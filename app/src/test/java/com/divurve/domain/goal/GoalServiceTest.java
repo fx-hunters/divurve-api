@@ -85,6 +85,16 @@ class GoalServiceTest {
                 0.0, null, null, null, null);
     }
 
+    /**
+     * 플래너 필드를 비운 수정 입력. 부분 갱신이라 {@code null} 은 "값 변경 없음"이므로
+     * 기존 케이스는 그 다섯 값을 건드리지 않는다.
+     */
+    private static GoalUpdateCommand updateCommand(String name, Double targetAmount,
+            LocalDate targetDate, Long budgetAmount, String budgetPeriod, Boolean isSpeculative) {
+        return new GoalUpdateCommand(name, targetAmount, targetDate, budgetAmount, budgetPeriod,
+                isSpeculative, null, null, null, null, null);
+    }
+
     /** 지원 통화(예 USD)의 정상 요청 흐름에서 공통으로 필요한 스텁. */
     private void givenSupportedCurrency(String currencyCode) {
         when(perUnitFxRates.find(currencyCode)).thenReturn(Optional.of(BigDecimal.ONE));
@@ -648,15 +658,13 @@ class GoalServiceTest {
         when(goalRepository.findById(goalId)).thenReturn(Optional.of(goal));
         when(owner.getId()).thenReturn(ownerId);
 
-        Goal result = goalService.update(
-                ownerId,
-                goalId,
+        Goal result = goalService.update(ownerId, goalId, updateCommand(
                 "수정된 목표",
                 20000.0,
                 LocalDate.of(2027, 12, 31),
                 200000L,
                 "year",
-                true);
+                true));
 
         assertThat(result.getName()).isEqualTo("수정된 목표");
         assertThat(result.getTargetAmount()).isEqualTo(20000.0);
@@ -680,15 +688,13 @@ class GoalServiceTest {
         when(goalRepository.findById(goalId)).thenReturn(Optional.of(goal));
         when(owner.getId()).thenReturn(ownerId);
 
-        Goal result = goalService.update(
-                ownerId,
-                goalId,
+        Goal result = goalService.update(ownerId, goalId, updateCommand(
                 "수정된 이름",
                 null,
                 null,
                 null,
                 null,
-                null);
+                null));
 
         assertThat(result.getName()).isEqualTo("수정된 이름");
         assertThat(result.getTargetAmount()).isEqualTo(10000.0);
@@ -714,15 +720,13 @@ class GoalServiceTest {
         when(goalRepository.findById(goalId)).thenReturn(Optional.of(goal));
         when(owner.getId()).thenReturn(ownerId);
 
-        Goal result = goalService.update(
-                ownerId,
-                goalId,
+        Goal result = goalService.update(ownerId, goalId, updateCommand(
                 null,
                 20000.0,
                 null,
                 null,
                 null,
-                null);
+                null));
 
         assertThat(result.getName()).isEqualTo("USD 목표");
         assertThat(result.getTargetAmount()).isEqualTo(20000.0);
@@ -740,8 +744,13 @@ class GoalServiceTest {
         when(goalRepository.findById(goalId)).thenReturn(Optional.of(goal));
         when(owner.getId()).thenReturn(ownerId);
 
-        assertThatThrownBy(() -> goalService.update(
-                ownerId, goalId, "   ", null, null, null, null, null))
+        assertThatThrownBy(() -> goalService.update(ownerId, goalId, updateCommand(
+                "   ",
+                null,
+                null,
+                null,
+                null,
+                null)))
                 .isInstanceOf(InvalidRequestException.class)
                 .hasFieldOrPropertyWithValue("field", "name");
     }
@@ -758,8 +767,13 @@ class GoalServiceTest {
         when(goalRepository.findById(goalId)).thenReturn(Optional.of(goal));
         when(owner.getId()).thenReturn(ownerId);
 
-        assertThatThrownBy(() -> goalService.update(
-                ownerId, goalId, null, null, LocalDate.of(2026, 9, 5), null, null, null))
+        assertThatThrownBy(() -> goalService.update(ownerId, goalId, updateCommand(
+                null,
+                null,
+                LocalDate.of(2026, 9, 5),
+                null,
+                null,
+                null)))
                 .isInstanceOf(InvalidRequestException.class)
                 .hasFieldOrPropertyWithValue("field", "target_date");
     }
@@ -776,10 +790,165 @@ class GoalServiceTest {
         when(goalRepository.findById(goalId)).thenReturn(Optional.of(goal));
         when(owner.getId()).thenReturn(ownerId);
 
-        assertThatThrownBy(() -> goalService.update(
-                ownerId, goalId, null, 0.0, null, null, null, null))
+        assertThatThrownBy(() -> goalService.update(ownerId, goalId, updateCommand(
+                null,
+                0.0,
+                null,
+                null,
+                null,
+                null)))
                 .isInstanceOf(InvalidRequestException.class)
                 .hasFieldOrPropertyWithValue("field", "target_amount");
+    }
+
+    // ── 수정 경로의 플래너 필드 (이슈 #197) ──────────────────────────────────
+
+    /** 플래너 필드가 이미 채워진 목표. 수정이 무엇을 건드리고 무엇을 두는지 보기 위한 기준이다. */
+    private Goal givenGoalWithPlannerFields(UUID goalId) {
+        Goal goal = Goal.builder(owner, "USD 목표", "deadline", "TRAVEL", "USD")
+                .targetAmount(10000.0)
+                .allocatedHoldingAmount(3000.0)
+                .preferredCadence("weekly")
+                .priorityConstraint(PriorityConstraint.AMOUNT)
+                .recurStartDate(LocalDate.of(2026, 10, 1))
+                .reviewHorizonMonths(6)
+                .status("active")
+                .build();
+        when(goalRepository.findById(goalId)).thenReturn(Optional.of(goal));
+        when(owner.getId()).thenReturn(ownerId);
+        return goal;
+    }
+
+    /** 플래너 필드만 담은 수정 입력. 앞쪽 여섯 값은 전부 "변경 없음"이다. */
+    private static GoalUpdateCommand plannerUpdate(Double allocatedHoldingAmount,
+            String preferredCadence, String priorityConstraint, LocalDate startDate,
+            Integer reviewHorizonMonths) {
+        return new GoalUpdateCommand(null, null, null, null, null, null,
+                allocatedHoldingAmount, preferredCadence, priorityConstraint, startDate,
+                reviewHorizonMonths);
+    }
+
+    @Test
+    @DisplayName("플래너 필드를 담지 않으면 다섯 값이 그대로 남는다")
+    void updateGoalWithoutPlannerFieldsLeavesThemUntouched() {
+        UUID goalId = UUID.randomUUID();
+        givenGoalWithPlannerFields(goalId);
+
+        Goal result = goalService.update(
+                ownerId, goalId, updateCommand("수정된 이름", null, null, null, null, null));
+
+        assertThat(result.getName()).isEqualTo("수정된 이름");
+        assertThat(result.getAllocatedHoldingAmount()).isEqualTo(3000.0);
+        assertThat(result.getPreferredCadence()).isEqualTo("weekly");
+        assertThat(result.getPriorityConstraint()).isEqualTo(PriorityConstraint.AMOUNT);
+        assertThat(result.getRecurStartDate()).isEqualTo(LocalDate.of(2026, 10, 1));
+        assertThat(result.getReviewHorizonMonths()).isEqualTo(6);
+    }
+
+    @Test
+    @DisplayName("플래너 필드 다섯 개를 모두 수정한다")
+    void updateGoalPlannerFields() {
+        UUID goalId = UUID.randomUUID();
+        givenGoalWithPlannerFields(goalId);
+
+        Goal result = goalService.update(ownerId, goalId,
+                plannerUpdate(500.0, "monthly", "date", LocalDate.of(2027, 1, 1), 12));
+
+        assertThat(result.getAllocatedHoldingAmount()).isEqualTo(500.0);
+        assertThat(result.getPreferredCadence()).isEqualTo("monthly");
+        assertThat(result.getPriorityConstraint()).isEqualTo(PriorityConstraint.DATE);
+        assertThat(result.getRecurStartDate()).isEqualTo(LocalDate.of(2027, 1, 1));
+        assertThat(result.getReviewHorizonMonths()).isEqualTo(12);
+    }
+
+    @Test
+    @DisplayName("배정 보유 외화를 0 으로 되돌릴 수 있다")
+    void updateGoalCanResetAllocationToZero() {
+        UUID goalId = UUID.randomUUID();
+        givenGoalWithPlannerFields(goalId);
+
+        Goal result = goalService.update(
+                ownerId, goalId, plannerUpdate(0.0, null, null, null, null));
+
+        // Double 로 받는 이유가 이것이다 — 원시 double 이면 0 이 "변경 없음"과 구분되지 않는다.
+        assertThat(result.getAllocatedHoldingAmount()).isZero();
+    }
+
+    @Test
+    @DisplayName("수정 시 우선 조건도 소문자 상수로 정규화한다")
+    void updateGoalNormalizesPriorityConstraintCase() {
+        UUID goalId = UUID.randomUUID();
+        givenGoalWithPlannerFields(goalId);
+
+        Goal result = goalService.update(
+                ownerId, goalId, plannerUpdate(null, null, "BUDGET", null, null));
+
+        assertThat(result.getPriorityConstraint()).isEqualTo(PriorityConstraint.BUDGET);
+    }
+
+    @Test
+    @DisplayName("수정 시 시작일은 과거여도 허용한다")
+    void updateGoalAllowsPastStartDate() {
+        UUID goalId = UUID.randomUUID();
+        givenGoalWithPlannerFields(goalId);
+
+        Goal result = goalService.update(
+                ownerId, goalId, plannerUpdate(null, null, null, LocalDate.of(2020, 1, 1), null));
+
+        // 이미 진행 중인 정기형 목표의 시작일은 과거다. 막으면 다른 필드 수정까지 거절된다.
+        assertThat(result.getRecurStartDate()).isEqualTo(LocalDate.of(2020, 1, 1));
+    }
+
+    @Test
+    @DisplayName("수정 시 배정 보유 외화가 음수면 거절한다")
+    void updateGoalNegativeAllocationRejected() {
+        UUID goalId = UUID.randomUUID();
+        givenGoalWithPlannerFields(goalId);
+
+        assertThatThrownBy(() -> goalService.update(
+                ownerId, goalId, plannerUpdate(-1.0, null, null, null, null)))
+                .isInstanceOf(InvalidRequestException.class)
+                .extracting(e -> ((InvalidRequestException) e).getField())
+                .isEqualTo("allocated_holding_amount");
+    }
+
+    @Test
+    @DisplayName("수정 시 알 수 없는 준비 주기는 거절한다")
+    void updateGoalUnknownCadenceRejected() {
+        UUID goalId = UUID.randomUUID();
+        givenGoalWithPlannerFields(goalId);
+
+        assertThatThrownBy(() -> goalService.update(
+                ownerId, goalId, plannerUpdate(null, "daily", null, null, null)))
+                .isInstanceOf(InvalidRequestException.class)
+                .extracting(e -> ((InvalidRequestException) e).getField())
+                .isEqualTo("preferred_cadence");
+    }
+
+    @Test
+    @DisplayName("수정 시 알 수 없는 우선 조건은 거절한다")
+    void updateGoalUnknownPriorityConstraintRejected() {
+        UUID goalId = UUID.randomUUID();
+        givenGoalWithPlannerFields(goalId);
+
+        assertThatThrownBy(() -> goalService.update(
+                ownerId, goalId, plannerUpdate(null, null, "vibes", null, null)))
+                .isInstanceOf(InvalidRequestException.class)
+                .extracting(e -> ((InvalidRequestException) e).getField())
+                .isEqualTo("priority_constraint");
+    }
+
+    @Test
+    @DisplayName("수정 시 점검 기간이 1개월 미만이면 거절한다")
+    void updateGoalNonPositiveReviewHorizonRejected() {
+        UUID goalId = UUID.randomUUID();
+        givenGoalWithPlannerFields(goalId);
+
+        assertThatThrownBy(() -> goalService.update(
+                ownerId, goalId, plannerUpdate(null, null, null, null, 0)))
+                .isInstanceOf(InvalidRequestException.class)
+                .extracting(e -> ((InvalidRequestException) e).getField())
+                .isEqualTo("review_horizon_months");
     }
 
     @Test

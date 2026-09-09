@@ -390,6 +390,21 @@ public class Goal {
         this.priorityConstraint = priorityConstraint;
     }
 
+    /** 마감형 준비 주기를 업데이트한다 (명세 §5.2). */
+    public void setPreferredCadence(String preferredCadence) {
+        this.preferredCadence = preferredCadence;
+    }
+
+    /** 정기형 첫 계획 시작일을 업데이트한다 (명세 §5.3). */
+    public void setRecurStartDate(LocalDate recurStartDate) {
+        this.recurStartDate = recurStartDate;
+    }
+
+    /** 정기형 점검 기간을 업데이트한다 (명세 §5.3). */
+    public void setReviewHorizonMonths(Integer reviewHorizonMonths) {
+        this.reviewHorizonMonths = reviewHorizonMonths;
+    }
+
     /** 테스트용 id 설정 (반사를 사용한다). */
     public void setIdForTest(UUID testId) {
         this.id = testId;
