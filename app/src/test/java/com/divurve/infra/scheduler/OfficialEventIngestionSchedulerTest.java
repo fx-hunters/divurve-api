@@ -63,7 +63,7 @@ class OfficialEventIngestionSchedulerTest {
         private final Supplier<IngestionReport> behavior;
 
         private StubIngestionService(Supplier<IngestionReport> behavior) {
-            super((from, to) -> List.of(),
+            super((key, from, to) -> List.of(),
                     Mockito.mock(EconEventRepository.class),
                     Clock.systemUTC());
             this.behavior = behavior;

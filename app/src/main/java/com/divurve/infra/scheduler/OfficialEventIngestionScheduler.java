@@ -42,9 +42,9 @@ public class OfficialEventIngestionScheduler {
         try {
             IngestionReport report = ingestionService.ingest();
             log.info("official_event_schedule_completed scheduled={} inserted={} promoted={} "
-                    + "skipped={} unknown={}",
+                    + "skipped={} failed_calendars={}",
                 report.scheduled(), report.inserted(), report.promoted(),
-                report.skipped(), report.unknown());
+                report.skipped(), report.failedCalendars());
         } catch (RuntimeException e) {
             log.error("official_event_schedule_failed message={}", e.getMessage(), e);
         }

@@ -50,7 +50,7 @@ class AdminEconEventControllerTest {
         assertThat(data.inserted()).isEqualTo(5);
         assertThat(data.promoted()).isEqualTo(2);
         assertThat(data.skipped()).isEqualTo(3);
-        assertThat(data.unknown()).isEqualTo(2);
+        assertThat(data.failedCalendars()).isEqualTo(2);
         assertThat(data.failureReason()).isNull();
         assertThat(data.elapsedMs()).isEqualTo(840L);
     }
@@ -67,7 +67,7 @@ class AdminEconEventControllerTest {
         assertThat(data.inserted()).isNull();
         assertThat(data.promoted()).isNull();
         assertThat(data.skipped()).isNull();
-        assertThat(data.unknown()).isNull();
+        assertThat(data.failedCalendars()).isNull();
         assertThat(data.failureReason()).isEqualTo("IllegalStateException");
     }
 
