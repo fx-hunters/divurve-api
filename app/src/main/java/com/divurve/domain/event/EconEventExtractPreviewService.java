@@ -3,6 +3,7 @@ package com.divurve.domain.event;
 import com.divurve.common.architecture.UseCase;
 import com.divurve.common.exception.InvalidRequestException;
 import com.divurve.domain.ai.AiCallLogRecorder;
+import com.divurve.domain.ai.AiCallQuota;
 import com.divurve.domain.ai.AiCallOutcome;
 import com.divurve.domain.ai.entity.AiCallLog;
 import com.divurve.domain.port.EconEventExtractor;
@@ -11,6 +12,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.Objects;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -48,17 +50,20 @@ public class EconEventExtractPreviewService {
     static final int MAX_TEXT_LENGTH = 20_000;
 
     private final EconEventExtractor econEventExtractor;
+    private final AiCallQuota aiCallQuota;
     private final EconEventValidator econEventValidator;
     private final AiCallLogRecorder aiCallLogRecorder;
     private final Clock clock;
 
     public EconEventExtractPreviewService(
             EconEventExtractor econEventExtractor,
+            AiCallQuota aiCallQuota,
             EconEventValidator econEventValidator,
             AiCallLogRecorder aiCallLogRecorder,
             Clock clock) {
         this.econEventExtractor =
                 Objects.requireNonNull(econEventExtractor, "econEventExtractor");
+        this.aiCallQuota = Objects.requireNonNull(aiCallQuota, "aiCallQuota");
         this.econEventValidator =
                 Objects.requireNonNull(econEventValidator, "econEventValidator");
         this.aiCallLogRecorder = Objects.requireNonNull(aiCallLogRecorder, "aiCallLogRecorder");
@@ -97,6 +102,15 @@ public class EconEventExtractPreviewService {
         if (text.length() > MAX_TEXT_LENGTH) {
             throw new InvalidRequestException(
                     "원문은 " + MAX_TEXT_LENGTH + "자까지입니다.", "text");
+        }
+
+        // 미리보기도 같은 추출 상한을 본다(이슈 #178) — 관리자 수동 호출이라 건수는 적지만,
+        // 상한 없이 열어 두면 배치를 막아 둔 의미가 없다. 500 이 아니라 사유를 값으로 낸다(#122).
+        Optional<AiCallQuota.ExtractBlock> blocked = aiCallQuota.extractBlocked();
+        if (blocked.isPresent()) {
+            log.warn("이벤트 추출 미리보기가 쿼터에 막혔다. layer={}", blocked.get().code());
+            return new PreviewResult(
+                    extractorName(), List.of(), Instant.now(clock), blocked.get().code());
         }
 
         EconEventExtractor.RawArticle article =

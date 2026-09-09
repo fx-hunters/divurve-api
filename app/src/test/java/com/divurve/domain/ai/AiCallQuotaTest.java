@@ -36,6 +36,8 @@ class AiCallQuotaTest {
     private static final int PER_DEMO_USER = 30;
     private static final int PER_IP = 300;
     private static final int GLOBAL = 500;
+    /** 이슈 #178 — 추출 전용 상한. 전역보다 낮다. */
+    private static final int EXTRACT = 4;
 
     @Mock
     private AiCallLogRepository aiCallLogRepository;
@@ -44,7 +46,7 @@ class AiCallQuotaTest {
 
     private AiCallQuota quota() {
         return new AiCallQuota(aiCallLogRepository, Clock.fixed(NOW, ZoneOffset.UTC),
-                PER_USER, PER_DEMO_USER, PER_IP, GLOBAL);
+                PER_USER, PER_DEMO_USER, PER_IP, GLOBAL, EXTRACT);
     }
 
     /** 세 카운트를 한 행으로 돌려주는 쿼리를 흉내낸다 — 실제로도 한 번에 온다. */
@@ -168,12 +170,53 @@ class AiCallQuotaTest {
     void 인자가_null_이면_실패한다() {
         Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);
         assertThatThrownBy(() ->
-                new AiCallQuota(null, clock, PER_USER, PER_DEMO_USER, PER_IP, GLOBAL))
+                new AiCallQuota(null, clock, PER_USER, PER_DEMO_USER, PER_IP, GLOBAL, EXTRACT))
                 .isInstanceOf(NullPointerException.class);
         assertThatThrownBy(() ->
-                new AiCallQuota(aiCallLogRepository, null, PER_USER, PER_DEMO_USER, PER_IP, GLOBAL))
+                new AiCallQuota(aiCallLogRepository, null, PER_USER, PER_DEMO_USER, PER_IP, GLOBAL, EXTRACT))
                 .isInstanceOf(NullPointerException.class);
         assertThatThrownBy(() -> quota().exceededLayer(null, false, CLIENT_IP))
                 .isInstanceOf(NullPointerException.class);
+    }
+
+    // ── 추출 쿼터 (이슈 #178) ────────────────────────────────────
+
+    /**
+     * 이슈 #178 — 예전에는 서술만 상한을 검사해서, 배치가 예산을 먹으면 <b>사용자가</b> 템플릿
+     * 문장을 보고 정작 배치는 계속 돌았다. 배치가 먼저 멈춰야 나머지가 사용자 몫으로 남는다.
+     */
+    @Test
+    @DisplayName("추출이 자기 상한에 닿으면 배치를 막는다 — 전역은 아직 남아 있다")
+    void 추출_상한에_닿으면_막는다() {
+        when(aiCallLogRepository.countExtractSince(any())).thenReturn((long) EXTRACT);
+
+        assertThat(quota().extractBlocked()).contains(AiCallQuota.ExtractBlock.EXTRACT);
+    }
+
+    @Test
+    @DisplayName("추출 몫이 남아 있으면 통과한다")
+    void 추출_몫이_남으면_통과한다() {
+        when(aiCallLogRepository.countExtractSince(any())).thenReturn((long) EXTRACT - 1);
+        stubCounts(0, 0, 0);
+
+        assertThat(quota().extractBlocked()).isEmpty();
+    }
+
+    /** 배치 몫이 남아 있어도 예산 전체가 끝났으면 멈춘다 — 전역은 킬스위치다. */
+    @Test
+    @DisplayName("추출 몫이 남아도 전역이 꽉 차면 막는다")
+    void 전역이_차면_막는다() {
+        when(aiCallLogRepository.countExtractSince(any())).thenReturn(0L);
+        stubCounts(0, 0, GLOBAL);
+
+        assertThat(quota().extractBlocked()).contains(AiCallQuota.ExtractBlock.GLOBAL);
+    }
+
+    @Test
+    @DisplayName("추출 층 코드는 서술 층과 같은 표기 규약을 쓴다")
+    void 코드_표기가_일관된다() {
+        assertThat(AiCallQuota.ExtractBlock.EXTRACT.code()).isEqualTo("quota_extract");
+        assertThat(AiCallQuota.ExtractBlock.GLOBAL.code())
+                .isEqualTo(AiCallQuota.Layer.GLOBAL.code());
     }
 }

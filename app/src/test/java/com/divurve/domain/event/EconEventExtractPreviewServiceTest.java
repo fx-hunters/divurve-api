@@ -7,10 +7,12 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.divurve.common.exception.InvalidRequestException;
 import com.divurve.domain.ai.AiCallLogRecorder;
+import com.divurve.domain.ai.AiCallQuota;
 import com.divurve.domain.port.EconEventExtractor;
 import java.net.SocketTimeoutException;
 import java.time.Clock;
@@ -41,6 +43,7 @@ class EconEventExtractPreviewServiceTest {
     private EconEventValidator validator;
     private EconEventRepository repository;
     private AiCallLogRecorder aiCallLogRecorder;
+    private AiCallQuota aiCallQuota;
     private EconEventExtractPreviewService service;
 
     @BeforeEach
@@ -49,7 +52,8 @@ class EconEventExtractPreviewServiceTest {
         validator = mock(EconEventValidator.class);
         repository = mock(EconEventRepository.class);
         aiCallLogRecorder = mock(AiCallLogRecorder.class);
-        service = new EconEventExtractPreviewService(extractor, validator, aiCallLogRecorder, CLOCK);
+        aiCallQuota = mock(AiCallQuota.class);
+        service = new EconEventExtractPreviewService(extractor, aiCallQuota, validator, aiCallLogRecorder, CLOCK);
     }
 
     private static EconEventExtractor.ExtractedEvent candidate(String date, String region) {
@@ -123,7 +127,7 @@ class EconEventExtractPreviewServiceTest {
             }
         };
         EconEventExtractPreviewService withNoop =
-                new EconEventExtractPreviewService(noop, validator, aiCallLogRecorder, CLOCK);
+                new EconEventExtractPreviewService(noop, aiCallQuota, validator, aiCallLogRecorder, CLOCK);
 
         EconEventExtractPreviewService.PreviewResult result = withNoop.preview(null, TEXT);
 
@@ -178,13 +182,37 @@ class EconEventExtractPreviewServiceTest {
     @Test
     @DisplayName("null 의존은 거부한다")
     void nullDependencies_Throw() {
-        assertThatThrownBy(() -> new EconEventExtractPreviewService(null, validator, aiCallLogRecorder, CLOCK))
+        assertThatThrownBy(() -> new EconEventExtractPreviewService(
+                null, aiCallQuota, validator, aiCallLogRecorder, CLOCK))
                 .isInstanceOf(NullPointerException.class);
-        assertThatThrownBy(() -> new EconEventExtractPreviewService(extractor, null, aiCallLogRecorder, CLOCK))
+        assertThatThrownBy(() -> new EconEventExtractPreviewService(
+                extractor, null, validator, aiCallLogRecorder, CLOCK))
                 .isInstanceOf(NullPointerException.class);
-        assertThatThrownBy(() -> new EconEventExtractPreviewService(extractor, validator, null, CLOCK))
+        assertThatThrownBy(() -> new EconEventExtractPreviewService(
+                extractor, aiCallQuota, null, aiCallLogRecorder, CLOCK))
                 .isInstanceOf(NullPointerException.class);
-        assertThatThrownBy(() -> new EconEventExtractPreviewService(extractor, validator, aiCallLogRecorder, null))
+        assertThatThrownBy(() -> new EconEventExtractPreviewService(
+                extractor, aiCallQuota, validator, null, CLOCK))
                 .isInstanceOf(NullPointerException.class);
+        assertThatThrownBy(() -> new EconEventExtractPreviewService(
+                extractor, aiCallQuota, validator, aiCallLogRecorder, null))
+                .isInstanceOf(NullPointerException.class);
+    }
+
+    /**
+     * 이슈 #178 — 미리보기도 같은 추출 상한을 본다. 관리자 수동 호출이라 건수는 적지만,
+     * 상한 없이 열어 두면 배치를 막아 둔 의미가 없다. 500 이 아니라 사유를 값으로 낸다(#122).
+     */
+    @Test
+    @DisplayName("쿼터에 막히면 추출기를 부르지 않고 사유를 값으로 낸다")
+    void 쿼터에_막히면_사유를_낸다() {
+        when(aiCallQuota.extractBlocked())
+                .thenReturn(java.util.Optional.of(AiCallQuota.ExtractBlock.EXTRACT));
+
+        EconEventExtractPreviewService.PreviewResult result = service.preview(null, TEXT);
+
+        assertThat(result.failureReason()).isEqualTo("quota_extract");
+        assertThat(result.candidates()).isEmpty();
+        verifyNoInteractions(extractor);
     }
 }
