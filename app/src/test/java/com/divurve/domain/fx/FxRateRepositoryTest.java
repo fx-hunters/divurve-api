@@ -108,4 +108,51 @@ class FxRateRepositoryTest extends RepositoryTestBase {
         assertThatThrownBy(() -> upsert(PAIR, DATE, "0.000000", "ECOS"))
                 .isInstanceOf(Exception.class);
     }
+
+    @Test
+    @DisplayName("신선도는 쌍별로 접히고 쌍 코드 순으로 나온다 (이슈 #128)")
+    void freshnessByPair_AggregatesPerPair() {
+        fxRateRepository.upsert(PAIR, LocalDate.of(2026, 9, 3), "mid",
+                new BigDecimal("1379.000000"), "ECOS", Instant.parse("2026-09-04T00:30:00Z"));
+        fxRateRepository.upsert(PAIR, LocalDate.of(2026, 9, 5), "mid",
+                new BigDecimal("1382.000000"), "ECOS", Instant.parse("2026-09-08T00:30:00Z"));
+        fxRateRepository.upsert("EURKRW", LocalDate.of(2026, 9, 4), "mid",
+                new BigDecimal("1490.000000"), "ECOS", Instant.parse("2026-09-07T00:30:00Z"));
+        entityManager.flush();
+        entityManager.clear();
+
+        List<FxRateRepository.PairFreshness> freshness = fxRateRepository.freshnessByPair();
+
+        assertThat(freshness).extracting(FxRateRepository.PairFreshness::getPairCode)
+                .containsExactly("EURKRW", PAIR);
+        assertThat(freshness.get(1).getLastFetchedAt())
+                .isEqualTo(Instant.parse("2026-09-08T00:30:00Z"));
+        assertThat(freshness.get(1).getLastQuoteDate()).isEqualTo(LocalDate.of(2026, 9, 5));
+    }
+
+    @Test
+    @DisplayName("행이 없는 쌍은 신선도에 나오지 않는다 — group by 는 없는 그룹을 만들지 않는다")
+    void freshnessByPair_OmitsPairsWithoutRows() {
+        upsert(PAIR, DATE, "1380.500000", "ECOS");
+
+        assertThat(fxRateRepository.freshnessByPair())
+                .extracting(FxRateRepository.PairFreshness::getPairCode)
+                .containsExactly(PAIR);
+    }
+
+    @Test
+    @DisplayName("두 최댓값은 같은 행에서 오지 않아도 된다 — 다른 질문에 답한다")
+    void freshnessByPair_MaximaAreIndependent() {
+        fxRateRepository.upsert(PAIR, LocalDate.of(2026, 9, 5), "mid",
+                new BigDecimal("1382.000000"), "ECOS", Instant.parse("2026-09-06T00:30:00Z"));
+        fxRateRepository.upsert(PAIR, LocalDate.of(2026, 9, 3), "mid",
+                new BigDecimal("1379.000000"), "ECOS_REVISED", Instant.parse("2026-09-09T00:30:00Z"));
+        entityManager.flush();
+        entityManager.clear();
+
+        FxRateRepository.PairFreshness freshness = fxRateRepository.freshnessByPair().get(0);
+
+        assertThat(freshness.getLastFetchedAt()).isEqualTo(Instant.parse("2026-09-09T00:30:00Z"));
+        assertThat(freshness.getLastQuoteDate()).isEqualTo(LocalDate.of(2026, 9, 5));
+    }
 }

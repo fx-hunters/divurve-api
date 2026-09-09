@@ -102,6 +102,20 @@
   관측은 영업일에만 존재하고, 없는 값을 채우면 그것이 곧 지어낸 수치다.
 - `fetched_at`(우리가 가져온 시각)과 `quote_date`(고시일)는 **다른 값**이다. 섞지 마라.
 
+**마지막 갱신 시각** (이슈 #128): `GET /api/v1/admin/fx-rates/status`
+- **읽기 전용이다.** 갱신을 트리거하지 않으므로 화면 진입 시 그냥 호출하라.
+- 응답 `data`: `fx`(`last_fetched_at`·`last_quote_date`·`pairs[]`) · `macro`(`last_refreshed_at`) ·
+  `checked_at`. `pairs[]` 는 `pair_code`·`last_fetched_at`·`last_quote_date`.
+- 값이 없으면 `null` 이고, 전역 `non_null` 직렬화 때문에 **키 자체가 빠진다.** 키 부재를 `null` 로
+  읽고 화면에는 `-` 로 표기하라.
+- **스케줄러가 돌린 갱신도 이 값에 반영된다** — 근거가 `fx_rates.fetched_at` 이라 적재 경로를
+  가리지 않는다. 버튼을 누른 적이 없어도 값이 보이는 것이 정상이다.
+- `pairs[]` 에는 **행이 하나라도 있는 쌍만** 나온다. 한 번도 받지 못한 쌍은 여기 없다 —
+  그 판정은 2-3 의 통화쌍 목록과 대조해야 한다.
+- **`macro.last_refreshed_at` 은 항상 비어 있다.** 거시지표 갱신은 받아온 값을 저장하지 않아
+  서버 기준 마지막 갱신이 존재하지 않는다. 그 자리를 `-` 로 두고, 저장하지 않는다는 것을
+  화면에 함께 적어라. 로딩 중으로 오해하게 만들지 마라.
+
 **갱신 버튼 2개**:
 - `POST /api/v1/admin/fx-rates/refresh?lookback_days=14` (기본 14)
   → `data`: `evicted_caches[]` · `total_upserted` · `has_failure` · `backfilled_days` ·

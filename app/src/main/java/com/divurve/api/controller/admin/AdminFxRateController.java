@@ -4,6 +4,7 @@ import com.divurve.api.config.auth.CurrentAdmin;
 import com.divurve.api.dto.admin.AdminFxRateBackfillResponse;
 import com.divurve.api.dto.admin.AdminFxRateCoverageResponse;
 import com.divurve.api.dto.admin.AdminFxRateSeriesResponse;
+import com.divurve.api.dto.admin.AdminFxRateStatusResponse;
 import com.divurve.api.dto.admin.AdminMacroRefreshRequest;
 import com.divurve.api.dto.admin.AdminMacroRefreshResponse;
 import com.divurve.api.dto.admin.AdminRefreshResponse;
@@ -12,6 +13,7 @@ import com.divurve.common.response.ApiResponse;
 import com.divurve.domain.fx.FxRateGapService;
 import com.divurve.domain.fx.FxRateQueryService;
 import com.divurve.domain.fx.FxRateRefreshService;
+import com.divurve.domain.fx.FxRateStatusService;
 import com.divurve.domain.macro.MacroRefreshService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -54,6 +56,7 @@ public class AdminFxRateController {
     private final FxRateQueryService fxRateQueryService;
     private final FxRateRefreshService fxRateRefreshService;
     private final FxRateGapService fxRateGapService;
+    private final FxRateStatusService fxRateStatusService;
     private final MacroRefreshService macroRefreshService;
     private final Clock clock;
 
@@ -61,11 +64,13 @@ public class AdminFxRateController {
             FxRateQueryService fxRateQueryService,
             FxRateRefreshService fxRateRefreshService,
             FxRateGapService fxRateGapService,
+            FxRateStatusService fxRateStatusService,
             MacroRefreshService macroRefreshService,
             Clock clock) {
         this.fxRateQueryService = fxRateQueryService;
         this.fxRateRefreshService = fxRateRefreshService;
         this.fxRateGapService = fxRateGapService;
+        this.fxRateStatusService = fxRateStatusService;
         this.macroRefreshService = macroRefreshService;
         this.clock = clock;
     }
@@ -85,6 +90,16 @@ public class AdminFxRateController {
         LocalDate start = from == null ? end.minusDays(DEFAULT_RANGE_DAYS) : from;
         return ApiResponse.of(AdminFxRateSeriesResponse.from(
                 fxRateQueryService.series(pairCode, start, end, rateType)));
+    }
+
+    @Operation(summary = "환율 적재 현황 (마지막 갱신 시각)",
+            description = "화면 진입만으로 마지막 갱신 시각을 보여 주기 위한 읽기 전용 조회다. "
+                    + "갱신을 트리거하지 않는다. 스케줄러가 돌린 갱신도 같은 값에 반영된다 — "
+                    + "근거가 fx_rates.fetched_at 이라 적재 경로를 가리지 않는다. "
+                    + "거시지표는 저장하지 않으므로 last_refreshed_at 이 비어 있다.")
+    @GetMapping("/fx-rates/status")
+    public ApiResponse<AdminFxRateStatusResponse> status(@CurrentAdmin UUID adminId) {
+        return ApiResponse.of(AdminFxRateStatusResponse.from(fxRateStatusService.status()));
     }
 
     @Operation(summary = "ECOS 환율 수동 갱신",
