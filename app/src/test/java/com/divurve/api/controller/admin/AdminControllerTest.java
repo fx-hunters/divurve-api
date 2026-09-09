@@ -16,6 +16,7 @@ import com.divurve.api.dto.admin.AdminExtractPreviewResponse;
 import com.divurve.api.dto.admin.AdminFxRateBackfillResponse;
 import com.divurve.api.dto.admin.AdminFxRateCoverageResponse;
 import com.divurve.api.dto.admin.AdminFxRateSeriesResponse;
+import com.divurve.api.dto.admin.AdminFxRateStatusResponse;
 import com.divurve.api.dto.admin.AdminMacroRefreshRequest;
 import com.divurve.api.dto.admin.AdminMacroRefreshResponse;
 import com.divurve.api.dto.admin.AdminRefreshResponse;
@@ -27,6 +28,7 @@ import com.divurve.domain.fx.FxRateGapService;
 import com.divurve.domain.fx.FxRateIngestionService;
 import com.divurve.domain.fx.FxRateQueryService;
 import com.divurve.domain.fx.FxRateRefreshService;
+import com.divurve.domain.fx.FxRateStatusService;
 import com.divurve.domain.macro.MacroRefreshService;
 import com.divurve.domain.master.MasterDataService;
 import com.divurve.domain.port.MacroSnapshot;
@@ -68,6 +70,7 @@ class AdminControllerTest {
     @Mock private FxRateQueryService fxRateQueryService;
     @Mock private FxRateRefreshService fxRateRefreshService;
     @Mock private FxRateGapService fxRateGapService;
+    @Mock private FxRateStatusService fxRateStatusService;
     @Mock private MacroRefreshService macroRefreshService;
     @Mock private EconEventExtractPreviewService econEventExtractPreviewService;
     @Mock private com.divurve.domain.ai.AiCallLogQueryService aiCallLogQueryService;
@@ -189,7 +192,46 @@ class AdminControllerTest {
         private AdminFxRateController controller() {
             return new AdminFxRateController(
                     fxRateQueryService, fxRateRefreshService, fxRateGapService,
-                    macroRefreshService, CLOCK);
+                    fxRateStatusService, macroRefreshService, CLOCK);
+        }
+
+        @Test
+        @DisplayName("적재 현황은 전체·쌍별을 옮기고 거시지표 자리는 비운다 (이슈 #128)")
+        void status_CarriesFxAndLeavesMacroEmpty() {
+            Instant checkedAt = Instant.parse("2026-09-09T05:00:00Z");
+            Instant lastFetchedAt = Instant.parse("2026-09-08T00:31:07Z");
+            when(fxRateStatusService.status()).thenReturn(
+                    new FxRateStatusService.StatusResult(
+                            lastFetchedAt, LocalDate.of(2026, 9, 5),
+                            List.of(new FxRateStatusService.PairStatus(
+                                    "USDKRW", lastFetchedAt, LocalDate.of(2026, 9, 5))),
+                            checkedAt));
+
+            AdminFxRateStatusResponse data = controller().status(ADMIN_ID).data();
+
+            assertThat(data.fx().lastFetchedAt()).isEqualTo(lastFetchedAt);
+            assertThat(data.fx().lastQuoteDate()).isEqualTo(LocalDate.of(2026, 9, 5));
+            assertThat(data.fx().pairs()).singleElement().satisfies(pair -> {
+                assertThat(pair.pairCode()).isEqualTo("USDKRW");
+                assertThat(pair.lastFetchedAt()).isEqualTo(lastFetchedAt);
+                assertThat(pair.lastQuoteDate()).isEqualTo(LocalDate.of(2026, 9, 5));
+            });
+            assertThat(data.macro().lastRefreshedAt()).isNull();
+            assertThat(data.checkedAt()).isEqualTo(checkedAt);
+        }
+
+        @Test
+        @DisplayName("적재가 없으면 전체가 null 이고 쌍 목록이 빈다 — 0 으로 채우지 않는다")
+        void status_EmptyWhenNothingIngested() {
+            when(fxRateStatusService.status()).thenReturn(
+                    new FxRateStatusService.StatusResult(
+                            null, null, List.of(), Instant.parse("2026-09-09T05:00:00Z")));
+
+            AdminFxRateStatusResponse data = controller().status(ADMIN_ID).data();
+
+            assertThat(data.fx().lastFetchedAt()).isNull();
+            assertThat(data.fx().lastQuoteDate()).isNull();
+            assertThat(data.fx().pairs()).isEmpty();
         }
 
         @Test
