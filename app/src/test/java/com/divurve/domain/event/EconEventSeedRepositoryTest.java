@@ -74,6 +74,22 @@ class EconEventSeedRepositoryTest extends RepositoryTestBase {
                 assertThat(event.getEventDate()).isBetween(from, to));
     }
 
+    /** 이슈 #176 — 관리자 화면의 "마지막 갱신" 을 채우는 집계. 실제 Postgres 로만 검증된다. */
+    @Test
+    @DisplayName("출처별 집계는 시드를 DEMO_SAMPLE 로 센다")
+    void 출처별_집계가_나온다() {
+        List<EconEventRepository.SourceKindStat> stats = repository.statsBySourceKind();
+
+        assertThat(stats).isNotEmpty();
+        EconEventRepository.SourceKindStat demo = stats.stream()
+                .filter(stat -> DEMO_SAMPLE.equals(stat.getSourceKind()))
+                .findFirst()
+                .orElseThrow();
+        assertThat(demo.getTotal()).isEqualTo(seeded().size());
+        assertThat(demo.getLastFetchedAt()).isNotNull();
+        assertThat(demo.getLastEventDate()).isNotNull();
+    }
+
     @Test
     @DisplayName("창 밖은 읽지 않는다 — 서비스가 다시 거를 필요가 없다")
     void 창_밖은_읽지_않는다() {
