@@ -5,7 +5,9 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.time.Instant;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
 
 /**
  * 경제 일정 접근 리포지토리. Spring Data JPA 가 런타임 구현을 주입한다.
@@ -36,4 +38,32 @@ public interface EconEventRepository extends JpaRepository<EconEvent, UUID> {
      */
     Optional<EconEvent> findByEventDateAndRegionAndTitle(
             LocalDate eventDate, String region, String title);
+
+    /**
+     * 출처별 적재 현황 (이슈 #176). 관리자 화면의 "마지막 갱신" 자리를 채운다.
+     *
+     * <p>출처를 <b>섞지 않고</b> 나눠 센다 — 공식 파서·AI 추출·시연용 예시를 한 숫자로 합치면
+     * 신뢰도 혼합 금지(#74 제약 4)가 무의미해진다. 시연용 시드가 아직 남아 있는지도 여기서 보인다.
+     */
+    @Query("select e.sourceKind as sourceKind, count(e) as total, "
+            + "max(e.fetchedAt) as lastFetchedAt, max(e.eventDate) as lastEventDate "
+            + "from EconEvent e group by e.sourceKind")
+    List<SourceKindStat> statsBySourceKind();
+
+    /**
+     * 출처 하나의 적재 현황.
+     *
+     * <p>{@code lastEventDate} 는 <b>얼마나 앞까지 채워져 있는가</b>를 말한다 — 적재가 언제
+     * 돌았는지({@code lastFetchedAt})와 다른 질문이다. 배치가 오늘 돌았어도 캘린더가 일정을
+     * 주지 않았다면 앞이 비어 있을 수 있다.
+     */
+    interface SourceKindStat {
+        String getSourceKind();
+
+        long getTotal();
+
+        Instant getLastFetchedAt();
+
+        LocalDate getLastEventDate();
+    }
 }
