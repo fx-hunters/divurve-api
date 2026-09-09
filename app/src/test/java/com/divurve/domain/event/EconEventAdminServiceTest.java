@@ -46,7 +46,7 @@ class EconEventAdminServiceTest {
     @Test
     @DisplayName("적재 집계를 그대로 낸다 — 성공 여부만 알려주면 이 화면의 목적이 사라진다")
     void 집계를_그대로_낸다() {
-        when(ingestionService.ingest()).thenReturn(new IngestionReport(12, 5, 2, 3, 2));
+        when(ingestionService.ingest()).thenReturn(new IngestionReport(12, 5, 2, 3, 2, LocalDate.of(2026, 11, 26)));
 
         RefreshResult result = service.refresh();
 
