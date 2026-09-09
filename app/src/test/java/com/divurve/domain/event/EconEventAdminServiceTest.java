@@ -54,7 +54,7 @@ class EconEventAdminServiceTest {
         assertThat(result.report().inserted()).isEqualTo(5);
         assertThat(result.report().promoted()).isEqualTo(2);
         assertThat(result.report().skipped()).isEqualTo(3);
-        assertThat(result.report().unknown()).isEqualTo(2);
+        assertThat(result.report().failedCalendars()).isEqualTo(2);
         assertThat(result.failureReason()).isNull();
         assertThat(result.refreshedAt()).isEqualTo(NOW);
     }

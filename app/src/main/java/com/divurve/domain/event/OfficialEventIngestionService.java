@@ -59,34 +59,45 @@ public class OfficialEventIngestionService {
      */
     public IngestionReport ingest() {
         LocalDate today = LocalDate.now(clock);
+        LocalDate until = today.plusDays(LOOKAHEAD_DAYS);
         Instant fetchedAt = clock.instant();
-        List<OfficialEvent> scheduled = source.fetchScheduled(today, today.plusDays(LOOKAHEAD_DAYS));
 
         // enum switch 로 세지 않는다 — 컴파일러가 넣는 암묵적 default 가 도달 불가 분기로 남아
         // 브랜치 커버리지에서 영원히 미커버가 된다(이슈 #40 과 같은 종류의 함정).
         Map<Outcome, Integer> counts = new EnumMap<>(Outcome.class);
-        int unknown = 0;
+        int scheduled = 0;
+        int failedCalendars = 0;
 
-        for (OfficialEvent event : scheduled) {
-            Optional<OfficialEventCatalog.Entry> entry = OfficialEventCatalog.find(event.name());
-            if (entry.isEmpty()) {
-                // 표에 없는 이름은 저장하지 않는다 — 중요도를 지어내지 않는다.
-                unknown++;
+        // 지표 하나씩 조회한다(이슈 #187). 캘린더 전체를 한 번에 받던 예전 방식은 관심 없는
+        // 지표까지 수천 건을 받아 응답 상한에 잘렸고, 실제로 구간의 5분의 1만 들어왔다.
+        for (OfficialEventCatalog.Entry entry : OfficialEventCatalog.entries()) {
+            List<OfficialEvent> dates;
+            try {
+                dates = source.fetchScheduled(entry.calendarKey(), today, until);
+            } catch (RuntimeException e) {
+                // 지표 하나가 실패해도 나머지를 계속한다 — 한 지표 때문에 배치 전체가 죽지
+                // 않는다(이슈 #74 제약과 같은 방향).
+                log.warn("official_event_calendar_failed key={} title={} reason={}",
+                        entry.calendarKey(), entry.title(), e.getMessage());
+                failedCalendars++;
                 continue;
             }
-            counts.merge(save(event, entry.get(), fetchedAt), 1, Integer::sum);
+            scheduled += dates.size();
+            for (OfficialEvent event : dates) {
+                counts.merge(save(event, entry, fetchedAt), 1, Integer::sum);
+            }
         }
 
         IngestionReport report = new IngestionReport(
-                scheduled.size(),
+                scheduled,
                 counts.getOrDefault(Outcome.INSERTED, 0),
                 counts.getOrDefault(Outcome.PROMOTED, 0),
                 counts.getOrDefault(Outcome.SKIPPED, 0),
-                unknown);
+                failedCalendars);
         log.info("official_event_ingestion_completed scheduled={} inserted={} promoted={} "
-                + "skipped={} unknown={}",
+                + "skipped={} failed_calendars={}",
             report.scheduled(), report.inserted(), report.promoted(),
-            report.skipped(), report.unknown());
+            report.skipped(), report.failedCalendars());
         return report;
     }
 
@@ -121,9 +132,9 @@ public class OfficialEventIngestionService {
      * @param inserted  새로 저장한 수
      * @param promoted  낮은 신뢰도 행을 공식으로 승격한 수
      * @param skipped   이미 공식이라 그대로 둔 수
-     * @param unknown   대조표에 없어 저장하지 않은 수
+     * @param failedCalendars 조회가 실패한 지표 수. 나머지 지표는 그대로 진행했다
      */
     public record IngestionReport(
-            int scheduled, int inserted, int promoted, int skipped, int unknown) {
+            int scheduled, int inserted, int promoted, int skipped, int failedCalendars) {
     }
 }

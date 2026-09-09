@@ -5,63 +5,59 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.lang.reflect.Constructor;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
 
 /**
- * {@link OfficialEventCatalog} 대조표 테스트 (이슈 #163).
+ * {@link OfficialEventCatalog} 대조표 테스트 (이슈 #163, 이슈 #187 로 키 변경).
  *
  * <p>이 표가 중요도의 유일한 출처다 — 공식 캘린더는 중요도를 주지 않고, LLM 에 묻지도 않는다.
- * 표에 없는 이름을 저장하지 않는 동작이 핵심이라 그 경로를 특히 본다.
+ * 그리고 이제 <b>조회 대상 목록</b>이기도 하다: 표에 없는 지표는 아예 요청하지 않는다.
  */
 @DisplayName("OfficialEventCatalog")
 class OfficialEventCatalogTest {
 
     @Test
-    @DisplayName("표에 있는 이름은 표시 제목과 중요도를 답한다")
-    void 표에_있으면_답한다() {
-        OfficialEventCatalog.Entry entry =
-                OfficialEventCatalog.find("Consumer Price Index").orElseThrow();
-
-        assertThat(entry.title()).isEqualTo("미국 소비자물가지수(CPI) 발표");
-        assertThat(entry.impact()).isEqualTo((short) 3);
+    @DisplayName("가져올 지표를 목록으로 낸다")
+    void 지표_목록을_낸다() {
+        assertThat(OfficialEventCatalog.entries()).isNotEmpty();
     }
 
     @Test
-    @DisplayName("앞뒤 공백은 흡수한다")
-    void 공백을_흡수한다() {
-        assertThat(OfficialEventCatalog.find("  Employment Situation  ")).isPresent();
+    @DisplayName("캘린더 식별자가 서로 겹치지 않는다 — 같은 지표를 두 번 조회하지 않는다")
+    void 식별자가_겹치지_않는다() {
+        assertThat(OfficialEventCatalog.entries())
+                .extracting(OfficialEventCatalog.Entry::calendarKey)
+                .doesNotHaveDuplicates();
     }
 
-    @ParameterizedTest
-    @ValueSource(strings = {"Unknown Release", "consumer price index", ""})
-    @DisplayName("표에 없는 이름은 빈 값 — 중요도를 지어내지 않는다")
-    void 표에_없으면_빈_값이다(String name) {
-        assertThat(OfficialEventCatalog.find(name)).isEmpty();
+    /**
+     * 이름이 아니라 식별자로 조회하는 것이 이슈 #187 의 요점이다. 식별자에 이름이 섞여 들어오면
+     * FRED 가 이름을 바꾸는 순간 그 지표가 조용히 사라진다 — 예전에 산업생산이 그랬다.
+     */
+    @Test
+    @DisplayName("식별자는 숫자다 — 이름이 아니다")
+    void 식별자는_숫자다() {
+        assertThat(OfficialEventCatalog.entries())
+                .allSatisfy(entry ->
+                        assertThat(entry.calendarKey()).matches("\\d+"));
     }
 
     @Test
-    @DisplayName("이름이 null 이면 빈 값")
-    void null이면_빈_값이다() {
-        assertThat(OfficialEventCatalog.find(null)).isEmpty();
-    }
-
-    @Test
-    @DisplayName("모든 항목의 중요도는 econ_events CHECK 제약(1~3) 안이다")
-    void 중요도는_제약_안이다() {
-        for (String name : new String[] {
-                "Consumer Price Index", "Employment Situation", "Gross Domestic Product",
-                "Personal Income and Outlays", "Producer Price Index",
-                "Advance Monthly Sales for Retail and Food Services",
-                "Job Openings and Labor Turnover Survey",
-                "Industrial Production and Capacity Utilization"}) {
-            OfficialEventCatalog.Entry entry = OfficialEventCatalog.find(name).orElseThrow(
-                    () -> new AssertionError("표에 없는 이름: " + name));
+    @DisplayName("모든 항목의 중요도는 econ_events CHECK 제약(1~3) 안이고 응답 어휘로 옮겨진다")
+    void 중요도가_제약_안이다() {
+        assertThat(OfficialEventCatalog.entries()).allSatisfy(entry -> {
             assertThat(entry.impact()).isBetween((short) 1, (short) 3);
-            assertThat(entry.title()).isNotBlank();
-            // 조회 시 응답 어휘로 옮겨질 수 있어야 한다 — 표 사이에 구멍이 있으면 화면에서 사라진다.
+            // 표 사이에 구멍이 있으면 화면에서 중요도가 통째로 사라진다.
             assertThat(EconEventVocabulary.toImportance(entry.impact())).isNotNull();
-        }
+        });
+    }
+
+    @Test
+    @DisplayName("표시 제목이 비어 있지 않고 서로 겹치지 않는다")
+    void 제목이_고유하다() {
+        assertThat(OfficialEventCatalog.entries())
+                .extracting(OfficialEventCatalog.Entry::title)
+                .doesNotHaveDuplicates()
+                .allSatisfy(title -> assertThat(title).isNotBlank());
     }
 
     @Test
