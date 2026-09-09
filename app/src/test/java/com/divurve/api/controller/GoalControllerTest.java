@@ -13,6 +13,7 @@ import com.divurve.api.dto.goal.GoalUpdateRequest;
 import com.divurve.common.response.ApiResponse;
 import com.divurve.domain.goal.GoalCreateCommand;
 import com.divurve.domain.goal.GoalService;
+import com.divurve.domain.goal.GoalUpdateCommand;
 import com.divurve.domain.goal.entity.Goal;
 import com.divurve.domain.user.entity.User;
 import java.time.LocalDate;
@@ -170,7 +171,12 @@ class GoalControllerTest {
                 LocalDate.of(2027, 12, 31),
                 200000L,
                 "year",
-                true);
+                true,
+                1500.0,
+                "biweekly",
+                "budget",
+                LocalDate.of(2026, 11, 1),
+                12);
 
         Goal updatedGoal = Goal.builder(owner, "수정된 목표", "deadline", "travel", "USD")
                 .targetAmount(20000.0)
@@ -182,15 +188,21 @@ class GoalControllerTest {
                 .build();
         updatedGoal.setIdForTest(goalId);
 
-        when(goalService.update(
-                currentUserId,
-                goalId,
+        // 커맨드를 값으로 정확히 맞춘다 — 컨트롤러가 요청 필드를 하나라도 흘리면 스텁이 어긋나
+        // null 이 돌아오고 테스트가 깨진다.
+        GoalUpdateCommand expected = new GoalUpdateCommand(
                 "수정된 목표",
                 20000.0,
                 LocalDate.of(2027, 12, 31),
                 200000L,
                 "year",
-                true)).thenReturn(updatedGoal);
+                true,
+                1500.0,
+                "biweekly",
+                "budget",
+                LocalDate.of(2026, 11, 1),
+                12);
+        when(goalService.update(currentUserId, goalId, expected)).thenReturn(updatedGoal);
         when(goalService.getHeldAmountByCurrency(currentUserId, "USD")).thenReturn(5000.0);
 
         ApiResponse<GoalResponse> response = goalController.updateGoal(

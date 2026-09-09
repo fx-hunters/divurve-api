@@ -145,33 +145,62 @@ public class GoalService {
 
     /** 소유자의 목표를 수정한다. */
     @Transactional
-    public Goal update(UUID ownerId, UUID goalId, String name, Double targetAmount,
-            LocalDate targetDate, Long budgetAmount, String budgetPeriod, Boolean isSpeculative) {
+    public Goal update(UUID ownerId, UUID goalId, GoalUpdateCommand command) {
+        Objects.requireNonNull(command, "command");
         Goal goal = getByIdAndOwner(ownerId, goalId);
 
-        if (name != null) {
-            requireNonBlankName(name);
-            goal.setName(name);
+        if (command.name() != null) {
+            requireNonBlankName(command.name());
+            goal.setName(command.name());
         }
-        if (targetAmount != null) {
-            requirePositiveAmount(targetAmount);
-            goal.setTargetAmount(targetAmount);
+        if (command.targetAmount() != null) {
+            requirePositiveAmount(command.targetAmount());
+            goal.setTargetAmount(command.targetAmount());
         }
-        if (targetDate != null) {
-            requireTargetDateNotPast(targetDate);
-            goal.setTargetDate(targetDate);
+        if (command.targetDate() != null) {
+            requireTargetDateNotPast(command.targetDate());
+            goal.setTargetDate(command.targetDate());
         }
-        if (budgetAmount != null) {
-            goal.setBudgetAmount(budgetAmount);
+        if (command.budgetAmount() != null) {
+            goal.setBudgetAmount(command.budgetAmount());
         }
-        if (budgetPeriod != null) {
-            goal.setBudgetPeriod(budgetPeriod);
+        if (command.budgetPeriod() != null) {
+            goal.setBudgetPeriod(command.budgetPeriod());
         }
-        if (isSpeculative != null) {
-            goal.setSpeculative(isSpeculative);
+        if (command.isSpeculative() != null) {
+            goal.setSpeculative(command.isSpeculative());
         }
+        applyPlannerFields(goal, command);
 
         return goal;
+    }
+
+    /**
+     * 플래너 계산 필드를 반영한다 (이슈 #197). 값이 있을 때만 건드린다 — 부분 갱신 계약이다.
+     *
+     * <p>{@code startDate} 는 과거 여부를 막지 않는다. 이미 진행 중인 정기형 목표의 시작일은
+     * 과거이고, 막으면 다른 필드를 고치려던 요청까지 거절된다.
+     */
+    private void applyPlannerFields(Goal goal, GoalUpdateCommand command) {
+        if (command.allocatedHoldingAmount() != null) {
+            requireNonNegativeAllocation(command.allocatedHoldingAmount());
+            goal.setAllocatedHoldingAmount(command.allocatedHoldingAmount());
+        }
+        if (command.preferredCadence() != null) {
+            requireKnownCadence(command.preferredCadence(), FIELD_PREFERRED_CADENCE);
+            goal.setPreferredCadence(command.preferredCadence());
+        }
+        if (command.priorityConstraint() != null) {
+            requireKnownPriorityConstraint(command.priorityConstraint());
+            goal.setPriorityConstraint(canonicalPriorityConstraint(command.priorityConstraint()));
+        }
+        if (command.startDate() != null) {
+            goal.setRecurStartDate(command.startDate());
+        }
+        if (command.reviewHorizonMonths() != null) {
+            requirePositiveReviewHorizon(command.reviewHorizonMonths());
+            goal.setReviewHorizonMonths(command.reviewHorizonMonths());
+        }
     }
 
     /** 소유자의 목표를 삭제한다. 계획 이력은 보존된다. */
@@ -299,11 +328,20 @@ public class GoalService {
         if (command.startDate() == null) {
             throw new InvalidRequestException("첫 계획 시작일을 입력해 주세요.", FIELD_START_DATE);
         }
-        if (command.reviewHorizonMonths() == null || command.reviewHorizonMonths() < 1) {
+        if (command.reviewHorizonMonths() == null) {
+            throw new InvalidRequestException(
+                    "점검 기간을 입력해 주세요.", FIELD_REVIEW_HORIZON_MONTHS);
+        }
+        requirePositiveReviewHorizon(command.reviewHorizonMonths());
+        requireKnownCadence(command.recurInterval(), FIELD_PREFERRED_CADENCE);
+    }
+
+    /** 점검 기간은 1개월 이상이어야 한다 (명세 §5.3). 생성과 수정이 같은 규칙을 쓴다. */
+    private void requirePositiveReviewHorizon(int reviewHorizonMonths) {
+        if (reviewHorizonMonths < 1) {
             throw new InvalidRequestException(
                     "점검 기간은 1개월 이상이어야 합니다.", FIELD_REVIEW_HORIZON_MONTHS);
         }
-        requireKnownCadence(command.recurInterval(), FIELD_PREFERRED_CADENCE);
     }
 
     /**

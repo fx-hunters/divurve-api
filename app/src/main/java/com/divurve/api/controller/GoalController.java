@@ -11,6 +11,7 @@ import com.divurve.common.architecture.WebAdapter;
 import com.divurve.common.response.ApiResponse;
 import com.divurve.domain.goal.GoalCreateCommand;
 import com.divurve.domain.goal.GoalService;
+import com.divurve.domain.goal.GoalUpdateCommand;
 import com.divurve.domain.goal.entity.Goal;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -102,15 +103,18 @@ public class GoalController {
             @PathVariable String id,
             @Valid @RequestBody GoalUpdateRequest request) {
         UUID goalId = UUID.fromString(id);
-        Goal goal = goalService.update(
-                userId,
-                goalId,
+        Goal goal = goalService.update(userId, goalId, new GoalUpdateCommand(
                 request.name(),
                 request.targetAmount(),
                 request.targetDate(),
                 request.budgetAmount(),
                 request.budgetPeriod(),
-                request.isSpeculative());
+                request.isSpeculative(),
+                request.allocatedHoldingAmount(),
+                request.preferredCadence(),
+                request.priorityConstraint(),
+                request.startDate(),
+                request.reviewHorizonMonths()));
         return ApiResponse.of(toGoalResponse(userId, goal));
     }
 
