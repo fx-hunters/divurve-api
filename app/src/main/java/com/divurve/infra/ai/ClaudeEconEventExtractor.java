@@ -19,8 +19,8 @@ import org.springframework.context.annotation.Primary;
  * 방법이 없다. 프롬프트 조립·응답 파싱은 {@link ClaudeExtractPrompt} 에 위임한다(SRP).
  *
  * <p><b>기본은 꺼짐</b> — {@code app.external.anthropic.extract-enabled=true} 일 때만 이 빈이
- * 만들어진다. 대상 뉴스 소스가 아직 팀 결정 전이라({@code MockRawArticleSource} 는 시연용
- * 자리표시자) 배치가 기본으로 실 API 를 호출하게 둘 수 없다.
+ * 만들어진다. 대상 뉴스 소스가 아직 팀 결정 전이라({@code NoOpRawArticleSource} 가 빈 목록을
+ * 돌려주는 자리표시자) 배치가 기본으로 실 API 를 호출하게 둘 수 없다.
  *
  * <p><b>꺼져 있어도 기동은 된다</b> — {@code EconEventIngestionService} 가 {@link EconEventExtractor}
  * 빈을 요구하므로, 이 빈이 없을 때는 {@link com.divurve.infra.event.NoOpEconEventExtractor} 가
