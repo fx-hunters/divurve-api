@@ -95,6 +95,7 @@ public class GoalService {
                 .orElseThrow(() -> new NotFoundException("사용자를 찾을 수 없습니다."));
 
         Goal goal = Goal.builder(owner, name, kind, purpose, currencyCode)
+                .goalType(resolveGoalType(kind))
                 .targetAmount(targetAmount)
                 .targetDate(targetDate)
                 .recurInterval(recurInterval)
@@ -216,6 +217,22 @@ public class GoalService {
         if (targetDate != null && targetDate.isBefore(LocalDate.now(clock))) {
             throw new InvalidRequestException("목표일은 과거일 수 없습니다.", FIELD_TARGET_DATE);
         }
+    }
+
+    /**
+     * 요청의 {@code kind} 를 계산이 읽는 {@code goal_type} 으로 옮긴다 (이슈 #193).
+     *
+     * <p>유형 컬럼이 둘이다 — 옛 {@code kind} 와 플래너가 읽는 {@code goal_type} 이다
+     * ({@code V16__planner_expand.sql}). {@code V16} 은 기존 행을 한 번 옮겼지만 생성 경로가
+     * {@code goal_type} 을 채우지 않아, 그 이후 만들어진 정기형 목표가 전부 빌더 기본값인
+     * 마감형으로 저장됐다. {@link Goal#isRecurring()} 이 {@code goal_type} 을 보므로
+     * {@code PlanInput.from(goal)} 이 정기형을 마감형 경로로 넘겼다.
+     *
+     * <p>정기형으로 인식하는 값은 {@link GoalType#RECURRING} 하나이며 대소문자를 가리지 않는다.
+     * 그 외는 마감형이다 — {@code kind} 화이트리스트 검증은 이 수정의 범위가 아니라 별도로 다룬다.
+     */
+    private static String resolveGoalType(String kind) {
+        return GoalType.RECURRING.equalsIgnoreCase(kind) ? GoalType.RECURRING : GoalType.DEADLINE;
     }
 
     /** 이름을 빈 문자열·공백으로 바꾸는 수정은 막는다. */

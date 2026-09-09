@@ -105,8 +105,57 @@ class GoalServiceTest {
         assertThat(result).isNotNull();
         assertThat(result.getName()).isEqualTo("USD 목표");
         assertThat(result.getKind()).isEqualTo("deadline");
+        assertThat(result.getGoalType()).isEqualTo(GoalType.DEADLINE);
         assertThat(result.getCurrencyCode()).isEqualTo("USD");
         assertThat(result.getStatus()).isEqualTo("active");
+    }
+
+    @Test
+    @DisplayName("정기형으로 만든 목표는 goal_type 이 recurring 이다 (이슈 #193)")
+    void createRecurringGoalPersistsGoalType() {
+        givenSupportedCurrency("USD");
+        when(userRepository.findById(ownerId)).thenReturn(Optional.of(owner));
+        when(goalRepository.save(any(Goal.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        Goal result = goalService.create(
+                ownerId, "ETF 적립", "recurring", "STOCK_ACCUMULATION", "USD",
+                10000.0, null, "monthly", 300000, "KRW", "monthly", false);
+
+        // goal_type 이 kind 를 따라가지 않으면 PlanInput.from(goal) 이 정기형을 마감형으로 넘긴다.
+        assertThat(result.getGoalType()).isEqualTo(GoalType.RECURRING);
+        assertThat(result.isRecurring()).isTrue();
+    }
+
+    @Test
+    @DisplayName("kind 의 대소문자가 달라도 정기형으로 인식한다")
+    void createRecurringGoalIgnoresKindCase() {
+        givenSupportedCurrency("USD");
+        when(userRepository.findById(ownerId)).thenReturn(Optional.of(owner));
+        when(goalRepository.save(any(Goal.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        Goal result = goalService.create(
+                ownerId, "ETF 적립", "RECURRING", "STOCK_ACCUMULATION", "USD",
+                10000.0, null, "monthly", 300000, "KRW", "monthly", false);
+
+        assertThat(result.getGoalType()).isEqualTo(GoalType.RECURRING);
+    }
+
+    @Test
+    @DisplayName("kind 가 null 이거나 정기형이 아니면 마감형으로 저장한다")
+    void createGoalWithUnknownKindFallsBackToDeadline() {
+        givenSupportedCurrency("USD");
+        when(userRepository.findById(ownerId)).thenReturn(Optional.of(owner));
+        when(goalRepository.save(any(Goal.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        Goal nullKind = goalService.create(
+                ownerId, "USD 목표", null, "TRAVEL", "USD",
+                10000.0, LocalDate.of(2026, 12, 31), null, 0, "KRW", null, false);
+        Goal unknownKind = goalService.create(
+                ownerId, "USD 목표", "banana", "TRAVEL", "USD",
+                10000.0, LocalDate.of(2026, 12, 31), null, 0, "KRW", null, false);
+
+        assertThat(nullKind.getGoalType()).isEqualTo(GoalType.DEADLINE);
+        assertThat(unknownKind.getGoalType()).isEqualTo(GoalType.DEADLINE);
     }
 
     @Test
