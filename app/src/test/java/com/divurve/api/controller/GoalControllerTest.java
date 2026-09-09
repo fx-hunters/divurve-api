@@ -11,6 +11,7 @@ import com.divurve.api.dto.goal.GoalListResponse;
 import com.divurve.api.dto.goal.GoalResponse;
 import com.divurve.api.dto.goal.GoalUpdateRequest;
 import com.divurve.common.response.ApiResponse;
+import com.divurve.domain.goal.GoalCreateCommand;
 import com.divurve.domain.goal.GoalService;
 import com.divurve.domain.goal.entity.Goal;
 import com.divurve.domain.user.entity.User;
@@ -92,7 +93,12 @@ class GoalControllerTest {
                 0,
                 "KRW",
                 null,
-                false);
+                false,
+                3000.0,
+                "monthly",
+                "date",
+                null,
+                null);
 
         Goal createdGoal = Goal.builder(owner, "USD 목표", "deadline", "travel", "USD")
                 .targetAmount(10000.0)
@@ -104,8 +110,9 @@ class GoalControllerTest {
                 .build();
         createdGoal.setIdForTest(UUID.randomUUID());
 
-        when(goalService.create(
-                currentUserId,
+        // 커맨드를 값으로 정확히 맞춘다 — 컨트롤러가 요청 필드를 하나라도 흘리면 스텁이 어긋나
+        // null 이 돌아오고 테스트가 깨진다. 이슈 #193 의 조용한 누락을 이 계층에서도 막는다.
+        GoalCreateCommand expected = new GoalCreateCommand(
                 "USD 목표",
                 "deadline",
                 "travel",
@@ -116,7 +123,13 @@ class GoalControllerTest {
                 0,
                 "KRW",
                 null,
-                false)).thenReturn(createdGoal);
+                false,
+                3000.0,
+                "monthly",
+                "date",
+                null,
+                null);
+        when(goalService.create(currentUserId, expected)).thenReturn(createdGoal);
         when(goalService.getHeldAmountByCurrency(currentUserId, "USD")).thenReturn(0.0);
 
         ApiResponse<GoalResponse> response = goalController.createGoal(currentUserId, request);

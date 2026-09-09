@@ -19,6 +19,11 @@ import java.time.LocalDate;
  * 조사 중 발견돼 {@code GlobalExceptionHandler} 에서 별도로 고쳤다(이슈 #75).
  *
  * <p>상한을 두지 않은 {@code targetAmount} 는 의도적이다 — 근거 없는 임의 상한은 정책 결정이다.
+ *
+ * <p>뒤쪽 다섯 필드는 플래너 계산이 읽는 값이다(이슈 #195). 전부 선택이며 비우면 서버가 유형별
+ * 기본값을 정한다 — 기존 클라이언트가 보내지 않아도 동작이 바뀌지 않으므로 브레이킹 체인지가
+ * 아니다. 다만 정기형은 {@code startDate} 와 {@code reviewHorizonMonths} 가 없으면 계획을 계산할
+ * 수 없어 {@code GoalService} 가 필수로 본다.
  */
 public record GoalCreateRequest(
         @NotBlank(message = "목표 이름은 필수입니다.") String name,
@@ -31,5 +36,10 @@ public record GoalCreateRequest(
         long budgetAmount,
         String budgetCurrencyCode,
         String budgetPeriod,
-        boolean isSpeculative) {
+        boolean isSpeculative,
+        double allocatedHoldingAmount,
+        String preferredCadence,
+        String priorityConstraint,
+        LocalDate startDate,
+        Integer reviewHorizonMonths) {
 }

@@ -10,10 +10,12 @@ import com.divurve.domain.holding.HoldingService;
 import com.divurve.domain.user.UserRepository;
 import com.divurve.domain.user.entity.User;
 import com.divurve.engine.bucket.BucketAllocator;
+import com.divurve.engine.planner.Cadence;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.UUID;
 import org.springframework.transaction.annotation.Transactional;
@@ -49,6 +51,18 @@ public class GoalService {
     private static final String FIELD_PURPOSE = "purpose";
     private static final String FIELD_TARGET_DATE = "target_date";
     private static final String FIELD_NAME = "name";
+    private static final String FIELD_ALLOCATED_HOLDING_AMOUNT = "allocated_holding_amount";
+    private static final String FIELD_PREFERRED_CADENCE = "preferred_cadence";
+    private static final String FIELD_PRIORITY_CONSTRAINT = "priority_constraint";
+    private static final String FIELD_START_DATE = "start_date";
+    private static final String FIELD_REVIEW_HORIZON_MONTHS = "review_horizon_months";
+
+    /**
+     * 마감형 준비 주기 기본값 (명세 §5.2). {@code PlanCalculationService} 의 계산 기본값과 같은
+     * 값을 저장 시점에 고정한다 — 열거에서 끌어와 둘이 어긋날 여지를 없앤다.
+     */
+    private static final String DEFAULT_DEADLINE_CADENCE =
+            Cadence.WEEKLY.name().toLowerCase(Locale.ROOT);
 
     private final GoalRepository goalRepository;
     private final UserRepository userRepository;
@@ -83,26 +97,35 @@ public class GoalService {
 
     /** 새 목표를 생성한다. */
     @Transactional
-    public Goal create(UUID ownerId, String name, String kind, String purpose, String currencyCode,
-            double targetAmount, LocalDate targetDate, String recurInterval,
-            long budgetAmount, String budgetCurrencyCode, String budgetPeriod, boolean isSpeculative) {
-        requirePositiveAmount(targetAmount);
-        requireSupportedCurrency(currencyCode);
-        requireKnownPurpose(purpose);
-        requireTargetDateNotPast(targetDate);
+    public Goal create(UUID ownerId, GoalCreateCommand command) {
+        Objects.requireNonNull(command, "command");
+        requirePositiveAmount(command.targetAmount());
+        requireSupportedCurrency(command.currencyCode());
+        requireKnownPurpose(command.purpose());
+        requireTargetDateNotPast(command.targetDate());
+        requireNonNegativeAllocation(command.allocatedHoldingAmount());
+        requireKnownCadence(command.preferredCadence(), FIELD_PREFERRED_CADENCE);
+        requireKnownPriorityConstraint(command.priorityConstraint());
+        requireRecurringPlannerFields(command);
 
         User owner = userRepository.findById(ownerId)
                 .orElseThrow(() -> new NotFoundException("사용자를 찾을 수 없습니다."));
 
-        Goal goal = Goal.builder(owner, name, kind, purpose, currencyCode)
-                .goalType(resolveGoalType(kind))
-                .targetAmount(targetAmount)
-                .targetDate(targetDate)
-                .recurInterval(recurInterval)
-                .budgetAmount(budgetAmount)
-                .budgetCurrencyCode(budgetCurrencyCode)
-                .budgetPeriod(budgetPeriod)
-                .isSpeculative(isSpeculative)
+        Goal goal = Goal.builder(
+                        owner, command.name(), command.kind(), command.purpose(), command.currencyCode())
+                .goalType(command.goalType())
+                .targetAmount(command.targetAmount())
+                .targetDate(command.targetDate())
+                .recurInterval(command.recurInterval())
+                .budgetAmount(command.budgetAmount())
+                .budgetCurrencyCode(command.budgetCurrencyCode())
+                .budgetPeriod(command.budgetPeriod())
+                .isSpeculative(command.isSpeculative())
+                .allocatedHoldingAmount(command.allocatedHoldingAmount())
+                .preferredCadence(resolvePreferredCadence(command))
+                .priorityConstraint(resolvePriorityConstraint(command))
+                .recurStartDate(command.startDate())
+                .reviewHorizonMonths(command.reviewHorizonMonths())
                 .status("active")
                 .build();
 
@@ -220,19 +243,108 @@ public class GoalService {
     }
 
     /**
-     * 요청의 {@code kind} 를 계산이 읽는 {@code goal_type} 으로 옮긴다 (이슈 #193).
+     * 배정할 보유 외화는 음수일 수 없다 (이슈 #195).
      *
-     * <p>유형 컬럼이 둘이다 — 옛 {@code kind} 와 플래너가 읽는 {@code goal_type} 이다
-     * ({@code V16__planner_expand.sql}). {@code V16} 은 기존 행을 한 번 옮겼지만 생성 경로가
-     * {@code goal_type} 을 채우지 않아, 그 이후 만들어진 정기형 목표가 전부 빌더 기본값인
-     * 마감형으로 저장됐다. {@link Goal#isRecurring()} 이 {@code goal_type} 을 보므로
-     * {@code PlanInput.from(goal)} 이 정기형을 마감형 경로로 넘겼다.
-     *
-     * <p>정기형으로 인식하는 값은 {@link GoalType#RECURRING} 하나이며 대소문자를 가리지 않는다.
-     * 그 외는 마감형이다 — {@code kind} 화이트리스트 검증은 이 수정의 범위가 아니라 별도로 다룬다.
+     * <p>상한은 두지 않는다 — 배정액이 목표 금액을 넘어도 거절하지 않는다. 계산이
+     * {@code max(T - H, 0)} 으로 흡수하고 {@code TARGET_ALREADY_MET} 경고를 내는 쪽이 사용자에게
+     * 더 정확하다. 배정 합계가 실제 보유 외화를 넘는지는 계획 계산 시점에
+     * {@code PlanAllocationGuard} 가 다른 목표의 배정액까지 합쳐 본다.
      */
-    private static String resolveGoalType(String kind) {
-        return GoalType.RECURRING.equalsIgnoreCase(kind) ? GoalType.RECURRING : GoalType.DEADLINE;
+    private void requireNonNegativeAllocation(double allocatedHoldingAmount) {
+        if (allocatedHoldingAmount < 0) {
+            throw new InvalidRequestException(
+                    "배정할 보유 외화는 0 이상이어야 합니다.", FIELD_ALLOCATED_HOLDING_AMOUNT);
+        }
+    }
+
+    /** 주기 코드는 {@link Cadence} 가 아는 값이어야 한다. 비어 있으면 기본값이 채운다. */
+    private void requireKnownCadence(String code, String field) {
+        if (code == null || code.isBlank()) {
+            return;
+        }
+        try {
+            Cadence.from(code);
+        } catch (IllegalArgumentException e) {
+            throw new InvalidRequestException("지원하지 않는 주기입니다: " + code, field);
+        }
+    }
+
+    /**
+     * 우선 조건은 명세가 정한 세 값 중 하나여야 한다 (명세 §5.1).
+     *
+     * <p>{@code PlanScenarioService} 가 {@code switch} 로 문자열을 정확히 비교하므로, 대소문자만
+     * 다른 값을 저장하면 조용히 금액 우선으로 떨어진다. 여기서 걸러 두고 저장은
+     * {@link #resolvePriorityConstraint} 가 소문자 상수로 정규화한다.
+     */
+    private void requireKnownPriorityConstraint(String value) {
+        if (value == null || value.isBlank()) {
+            return;
+        }
+        if (canonicalPriorityConstraint(value) == null) {
+            throw new InvalidRequestException(
+                    "지원하지 않는 우선 조건입니다: " + value, FIELD_PRIORITY_CONSTRAINT);
+        }
+    }
+
+    /**
+     * 정기형은 시작일과 점검 기간이 있어야 계획을 계산할 수 있다 (명세 §5.3).
+     *
+     * <p>없이 저장하면 목표는 만들어지는데 {@code POST /goals/&#123;id&#125;/plans} 가 400 을 내는
+     * 목표가 남는다. 저장 시점에 막아 그 상태 자체를 만들지 않는다.
+     */
+    private void requireRecurringPlannerFields(GoalCreateCommand command) {
+        if (!command.isRecurring()) {
+            return;
+        }
+        if (command.startDate() == null) {
+            throw new InvalidRequestException("첫 계획 시작일을 입력해 주세요.", FIELD_START_DATE);
+        }
+        if (command.reviewHorizonMonths() == null || command.reviewHorizonMonths() < 1) {
+            throw new InvalidRequestException(
+                    "점검 기간은 1개월 이상이어야 합니다.", FIELD_REVIEW_HORIZON_MONTHS);
+        }
+        requireKnownCadence(command.recurInterval(), FIELD_PREFERRED_CADENCE);
+    }
+
+    /**
+     * 준비 주기 기본값 (명세 §5.2).
+     *
+     * <p>정기형은 반복 주기가 곧 준비 주기다 — 따로 받을 이유가 없고, 둘이 다르면
+     * {@code PlanInput.from} 이 어느 쪽을 쓸지 사용자가 알 수 없다.
+     */
+    private static String resolvePreferredCadence(GoalCreateCommand command) {
+        if (command.preferredCadence() != null && !command.preferredCadence().isBlank()) {
+            return command.preferredCadence();
+        }
+        return command.isRecurring() ? command.recurInterval() : DEFAULT_DEADLINE_CADENCE;
+    }
+
+    /**
+     * 우선 조건 기본값 (명세 §5.1·§17).
+     *
+     * <p>유형마다 다르다 — 마감형은 금액, 정기형은 예산이다. {@code V16__planner_expand.sql} 도
+     * 기존 정기형 행을 {@code budget} 으로 백필했다. 빌더 기본값 하나로는 그 규칙을 지킬 수 없어
+     * 유형과 무관하게 {@code amount} 가 됐다.
+     */
+    private static String resolvePriorityConstraint(GoalCreateCommand command) {
+        String canonical = canonicalPriorityConstraint(command.priorityConstraint());
+        if (canonical != null) {
+            return canonical;
+        }
+        return command.isRecurring() ? PriorityConstraint.BUDGET : PriorityConstraint.AMOUNT;
+    }
+
+    /** 아는 우선 조건이면 소문자 상수로, 모르는 값이거나 비어 있으면 {@code null} 로 돌려준다. */
+    private static String canonicalPriorityConstraint(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return switch (value.toLowerCase(Locale.ROOT)) {
+            case PriorityConstraint.AMOUNT -> PriorityConstraint.AMOUNT;
+            case PriorityConstraint.DATE -> PriorityConstraint.DATE;
+            case PriorityConstraint.BUDGET -> PriorityConstraint.BUDGET;
+            default -> null;
+        };
     }
 
     /** 이름을 빈 문자열·공백으로 바꾸는 수정은 막는다. */
