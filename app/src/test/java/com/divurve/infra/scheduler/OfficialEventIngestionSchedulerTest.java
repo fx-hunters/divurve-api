@@ -7,6 +7,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.divurve.domain.event.EconEventRepository;
 import com.divurve.domain.event.OfficialEventIngestionService;
 import java.time.Clock;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
@@ -30,7 +31,8 @@ class OfficialEventIngestionSchedulerTest {
         AtomicInteger calls = new AtomicInteger();
         StubIngestionService stub = new StubIngestionService(() -> {
             calls.incrementAndGet();
-            return new OfficialEventIngestionService.IngestionReport(5, 3, 1, 1, 2);
+            return new OfficialEventIngestionService.IngestionReport(
+                    5, 3, 1, 1, 2, LocalDate.of(2026, 11, 26));
         });
 
         assertThatNoException().isThrownBy(new OfficialEventIngestionScheduler(stub)::ingest);

@@ -32,6 +32,10 @@ import org.slf4j.LoggerFactory;
  *   <li>기존이 {@code AI_EXTRACTED}·{@code DEMO_SAMPLE} 이면 <b>공식으로 승격</b>한다</li>
  * </ul>
  * 승격이 없으면 신뢰도가 낮은 행이 먼저 자리를 잡았다는 이유로 공식 데이터가 버려진다.
+ *
+ * <p><b>입구가 둘이다</b>(이슈 #191) — 지표 발표 일정은 FRED 를 호출해 받고, 중앙은행 회의
+ * 일정은 {@link CentralBankMeetingCatalog} 에서 읽는다. FRED 에는 회의체 일정이 없기
+ * 때문이며, 저장 경로는 하나로 합쳐 두 출처가 같은 중복·승격 규칙을 받게 한다.
  */
 @UseCase
 public class OfficialEventIngestionService {
@@ -84,8 +88,32 @@ public class OfficialEventIngestionService {
             }
             scheduled += dates.size();
             for (OfficialEvent event : dates) {
-                counts.merge(save(event, entry, fetchedAt), 1, Integer::sum);
+                counts.merge(
+                        save(event.date(), event.region(), entry.title(), entry.impact(),
+                                event.sourceUrl(), fetchedAt),
+                        1, Integer::sum);
             }
+        }
+
+        // 중앙은행 회의는 FRED 가 주지 않으므로 domain 의 고정 표에서 온다(이슈 #191).
+        // 외부 호출이 없어 실패할 것이 없고, 그래서 failedCalendars 에 잡히지 않는다.
+        for (CentralBankMeetingCatalog.Meeting meeting : CentralBankMeetingCatalog.meetings()) {
+            if (meeting.date().isBefore(today) || meeting.date().isAfter(until)) {
+                continue;
+            }
+            scheduled++;
+            counts.merge(
+                    save(meeting.date(), meeting.region(), meeting.title(), meeting.impact(),
+                            meeting.sourceUrl(), fetchedAt),
+                    1, Integer::sum);
+        }
+
+        LocalDate coveredThrough = CentralBankMeetingCatalog.coveredThrough();
+        if (coveredThrough.isBefore(until)) {
+            // 표가 조회 구간을 다 덮지 못한다 — 그 뒤 구간은 회의 일정이 통째로 비어 있다는
+            // 뜻이다. 표를 갱신하라는 신호이며, 조용히 비는 것을 막는 유일한 장치다.
+            log.warn("central_bank_calendar_expiring covered_through={} requested_until={}",
+                    coveredThrough, until);
         }
 
         IngestionReport report = new IngestionReport(
@@ -93,22 +121,23 @@ public class OfficialEventIngestionService {
                 counts.getOrDefault(Outcome.INSERTED, 0),
                 counts.getOrDefault(Outcome.PROMOTED, 0),
                 counts.getOrDefault(Outcome.SKIPPED, 0),
-                failedCalendars);
+                failedCalendars,
+                coveredThrough);
         log.info("official_event_ingestion_completed scheduled={} inserted={} promoted={} "
-                + "skipped={} failed_calendars={}",
+                + "skipped={} failed_calendars={} central_bank_calendar_through={}",
             report.scheduled(), report.inserted(), report.promoted(),
-            report.skipped(), report.failedCalendars());
+            report.skipped(), report.failedCalendars(), report.centralBankCalendarThrough());
         return report;
     }
 
-    private Outcome save(OfficialEvent event, OfficialEventCatalog.Entry entry, Instant fetchedAt) {
-        Optional<EconEvent> existing = repository.findByEventDateAndRegionAndTitle(
-                event.date(), event.region(), entry.title());
+    private Outcome save(LocalDate date, String region, String title, short impact,
+            String sourceUrl, Instant fetchedAt) {
+        Optional<EconEvent> existing =
+                repository.findByEventDateAndRegionAndTitle(date, region, title);
 
         if (existing.isEmpty()) {
-            repository.save(EconEvent.official(
-                    event.date(), event.region(), entry.title(),
-                    entry.impact(), event.sourceUrl(), fetchedAt));
+            repository.save(
+                    EconEvent.official(date, region, title, impact, sourceUrl, fetchedAt));
             return Outcome.INSERTED;
         }
 
@@ -116,7 +145,7 @@ public class OfficialEventIngestionService {
         if (found.isOfficial()) {
             return Outcome.SKIPPED;
         }
-        found.promoteToOfficial(entry.impact(), event.sourceUrl(), fetchedAt);
+        found.promoteToOfficial(impact, sourceUrl, fetchedAt);
         repository.save(found);
         return Outcome.PROMOTED;
     }
@@ -133,8 +162,11 @@ public class OfficialEventIngestionService {
      * @param promoted  낮은 신뢰도 행을 공식으로 승격한 수
      * @param skipped   이미 공식이라 그대로 둔 수
      * @param failedCalendars 조회가 실패한 지표 수. 나머지 지표는 그대로 진행했다
+     * @param centralBankCalendarThrough 중앙은행 회의 표가 유효한 마지막 날. 이 날짜가 조회
+     *                                   구간 끝보다 앞이면 그 뒤는 회의 일정이 비어 있다
      */
     public record IngestionReport(
-            int scheduled, int inserted, int promoted, int skipped, int failedCalendars) {
+            int scheduled, int inserted, int promoted, int skipped, int failedCalendars,
+            LocalDate centralBankCalendarThrough) {
     }
 }

@@ -29,6 +29,7 @@ class AdminEconEventControllerTest {
 
     private static final UUID ADMIN_ID = UUID.randomUUID();
     private static final Instant NOW = Instant.parse("2026-09-09T04:10:00Z");
+    private static final LocalDate CALENDAR_THROUGH = LocalDate.of(2026, 11, 26);
 
     @Mock
     private EconEventAdminService econEventAdminService;
@@ -42,7 +43,7 @@ class AdminEconEventControllerTest {
     void 성공_집계를_옮긴다() {
         when(econEventAdminService.refresh()).thenReturn(
                 new EconEventAdminService.RefreshResult(
-                        new IngestionReport(12, 5, 2, 3, 2), null, NOW, 840L));
+                        new IngestionReport(12, 5, 2, 3, 2, CALENDAR_THROUGH), null, NOW, 840L));
 
         AdminEconEventRefreshResponse data = controller().refresh(ADMIN_ID).data();
 
@@ -51,6 +52,7 @@ class AdminEconEventControllerTest {
         assertThat(data.promoted()).isEqualTo(2);
         assertThat(data.skipped()).isEqualTo(3);
         assertThat(data.failedCalendars()).isEqualTo(2);
+        assertThat(data.centralBankCalendarThrough()).isEqualTo(CALENDAR_THROUGH);
         assertThat(data.failureReason()).isNull();
         assertThat(data.elapsedMs()).isEqualTo(840L);
     }
@@ -68,6 +70,7 @@ class AdminEconEventControllerTest {
         assertThat(data.promoted()).isNull();
         assertThat(data.skipped()).isNull();
         assertThat(data.failedCalendars()).isNull();
+        assertThat(data.centralBankCalendarThrough()).isNull();
         assertThat(data.failureReason()).isEqualTo("IllegalStateException");
     }
 
